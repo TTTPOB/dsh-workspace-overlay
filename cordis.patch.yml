@@ -1,0 +1,8 @@
+# dsh-workspace-overlay bundle patch: register the workspaceRegistry provider.
+# Applied as a bundle layer; the row references this package by name so the
+# profile's own dependency tree resolves it (see docs/user/develop/basic/publish).
+- insert:
+    - id: workspace-registry
+      name: dsh-workspace-overlay
+      config:
+        trustWorkspaceConfig: true
