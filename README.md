@@ -2,7 +2,7 @@
 
 DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis scope（`workspaceCordis` service）。同一 workspace 的所有消费者（session、agent）租用同一个 scope；最后一个租约释放时 scope 被 dispose。可选地，首个租约会把 `<workspace>/.dsh/cordis.yml` 挂载为该 workspace 的 Cordis composition；bundle 同时接线 Agent 集成：`ctx.agents.create/resume` 前置 workspace 绑定，官方 `agentPresets` 的 mount/composeFrom/recompose 被 decorator 接管为 workspace-local preset generation（见下文「Agent 集成」）。`./mcp` 子路径提供从官方 rc.6 `@deepseek-ai/dsh-mcp-client` 移植的 MCP core（transport / tool sync / connection supervisor），以及 workspace-aware MCP manager + 插件入口（global 每 serverName 一进程、workspace override 每 workspace 一进程、继承 global 的 workspace 零额外进程、同名 namespace 整体遮蔽，见「MCP manager」）。
 
-目标 DSH：`0.1.0-rc.6`（`@deepseek-ai/cordis` 4.0.1、`@deepseek-ai/dsh-scope` 0.1.0-rc.6、`@deepseek-ai/cordis-plugin-include` 1.0.6、`@deepseek-ai/cordis-plugin-loader` 1.0.2、`@deepseek-ai/dsh-agent-presets` 0.1.0-rc.6、`@deepseek-ai/dsh-mcp-client` 0.1.0-rc.6），均为 peer + dev 依赖，版本与安装版一致。
+目标 DSH：`0.1.0-rc.6`。运行时peer包括`@deepseek-ai/cordis` 4.0.1、`@deepseek-ai/dsh-scope` 0.1.0-rc.6、`@deepseek-ai/cordis-plugin-include` 1.0.6、`@deepseek-ai/cordis-plugin-loader` 1.0.2、`@deepseek-ai/dsh-agent-presets` 0.1.0-rc.6及代码实际import的DSH service包；版本均与安装版一致。`@deepseek-ai/dsh-mcp-client` 0.1.0-rc.6只作为开发依赖用于Config parity测试。
 
 ## API（`./registry`）
 
@@ -65,7 +65,7 @@ dsh plugin --profile web add /path/to/dsh-workspace-overlay
 
 Workspace 声明某 `serverName` 时，整个继承的 global `mcp__<serverName>__*` namespace 被遮蔽，不出现“自己几个工具 + global 漏网工具”的混合视图；global 其它 namespace 不受影响。实现是 workspace scope 上的 `ctx.tools.restrict({ deny })`，其中 `deny = 当前 global 全量 public names − workspace own 已注册 names`。减号是 rc.6 `view()` 语义要求的：restriction 会过滤继承面上的所有名字，workspace 自己 layer 注册的工具只对该 scope 自身的视图豁免——对 workspace 下的 Agent（后代 scope）而言它们仍属继承面，若 deny 包含它们，Agent 会连自己的工具都看不到；被减去的名字由 workspace 自己的注册自然 shadow，正是“替换”。
 
-Manager 从每个连接（global 与 workspace 都接）的 generation 通知维护全量名字集合；global generation 换代、give-up、dispose，以及 workspace own 工具列表变化（`list_changed`）时，对该 `serverName` 的全部 live workspace override 在各自的串行 commit 链上重建 mask（先 dispose 旧 mask，再在同一同步步内创建新 restrict，`await` 之间不存在“旧 global 短暂可见”的窗口）。Workspace override 没有 global generation 时不需要 mask。`restrict()` 要求 scoped ctx 且 deny 名已是继承面已知名，这两条都由“先注册、后建 mask”的时序保证。
+Manager从每个连接（global与workspace都接）的generation通知维护全量名字集合；global generation换代、give-up、dispose，以及workspace own工具列表变化（`list_changed`）时，对该`serverName`的全部live workspace override在各自的串行commit链上重建mask。替代restriction先安装，旧restriction再在同一同步步骤中dispose；重建失败时保留上一好mask，且`await`之间不存在完全解除遮蔽的窗口。Workspace override没有global generation时不需要mask。`restrict()`要求scoped ctx且deny名已是继承面已知名，这两条都由“先注册、后建mask”的时序保证。
 
 ### 生命周期与失败语义
 

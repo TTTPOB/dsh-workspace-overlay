@@ -81,7 +81,8 @@
   },
   "files": [
     "dist",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "LICENSE"
   ],
   "dsh": {
     "bundle": {

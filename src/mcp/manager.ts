@@ -24,8 +24,8 @@
  * subtracted names are instead shadowed by the workspace's own registrations,
  * which is exactly "replaced". `restrict()` demands scoped contexts and
  * known deny names, so masks are built only after the tracked global
- * generation is registered, and rebuilt — disposed first, new restriction
- * created in the same synchronous step, no `await` in between — whenever the
+ * generation is registered, and rebuilt — replacement installed before the
+ * prior restriction is disposed, with no `await` in between — whenever the
  * global generation swaps, gives up, or the workspace's own tool list
  * changes. All mask mutations for one `serverName` run on one serial commit
  * chain, so a global change can never interleave with an override's own
@@ -300,22 +300,24 @@ export default class WorkspaceMcpManager extends Service {
   }
 
   /**
-   * Rebuild one override's mask from the current snapshots: dispose the old
-   * mask first, then — in the same synchronous step, so no `await` boundary
-   * lets the old global generation become visible — create the new
-   * restriction when the deny set is non-empty. Without a tracked global
-   * generation (or when the deny set is empty) no mask exists.
+   * Rebuild one override's mask from the current snapshots. A replacement
+   * restriction is installed before the prior one is disposed, so a failed
+   * rebuild keeps the last good mask rather than exposing the whole inherited
+   * namespace. Without a tracked global generation (or when the deny set is
+   * empty), the prior mask is removed.
    */
   private rebuildMask(serverName: string, scopeKey: ScopeKey): void {
     const record = this.overrides.get(serverName)?.get(scopeKey)
     if (record === undefined || record.removed) return
-    record.maskDisposer?.()
-    record.maskDisposer = undefined
+    const previous = record.maskDisposer
     record.maskError = undefined
     const global = this.globalNames.get(serverName)
-    if (global === undefined || global.length === 0) return
-    const deny = global.filter(name => !record.ownNames.has(name))
-    if (deny.length === 0) return
+    const deny = global?.filter(name => !record.ownNames.has(name)) ?? []
+    if (deny.length === 0) {
+      previous?.()
+      record.maskDisposer = undefined
+      return
+    }
     try {
       const tools = record.ctx.get('tools')
       /* v8 ignore next -- the manager's inject guarantees the registry exists for every live row */
@@ -325,8 +327,11 @@ export default class WorkspaceMcpManager extends Service {
         )
         return
       }
-      record.maskDisposer = tools.restrict({ deny })
+      const replacement = tools.restrict({ deny })
+      previous?.()
+      record.maskDisposer = replacement
     } catch (error) {
+      record.maskDisposer = previous
       record.maskError = error
       // The deny names must already be known on the workspace's inherited
       // surface; a failure here means the tracked global generation is out of
