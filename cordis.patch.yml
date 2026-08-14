@@ -1,10 +1,15 @@
-# dsh-workspace-overlay bundle patch: register the workspaceCordis provider.
-# Applied as a bundle layer; the row references this package by name so the
-# profile's own dependency tree resolves it (see docs/user/develop/basic/publish).
-# The provider activates only once the host Loader exists (static inject), so
-# the first acquire of a workspace can mount <workspace>/.dsh/cordis.yml.
+# dsh-workspace-overlay bundle patch: register the workspaceCordis provider and
+# wire the workspace-agent integration (AgentRegistry + agentPresets
+# decorators). Applied as a bundle layer; the rows reference this package by
+# name so the profile's own dependency tree resolves them (see
+# docs/user/develop/basic/publish). The official agent-presets row stays
+# untouched: the decorators wrap its provider target at activation, and the
+# integration row's inject waits until agents/agentPresets/workspaceCordis
+# are all available.
 - insert:
     - id: workspace-registry
       name: dsh-workspace-overlay
       config:
         trustWorkspaceConfig: true
+    - id: workspace-agent-integration
+      name: dsh-workspace-overlay/integration-plugin

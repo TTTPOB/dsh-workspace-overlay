@@ -33,6 +33,18 @@
       "types": "./dist/agent-integration.d.ts",
       "default": "./dist/agent-integration.js"
     },
+    "./agent-presets-decorator": {
+      "types": "./dist/agent-presets-decorator.d.ts",
+      "default": "./dist/agent-presets-decorator.js"
+    },
+    "./workspace-presets": {
+      "types": "./dist/workspace-presets.d.ts",
+      "default": "./dist/workspace-presets.js"
+    },
+    "./integration-plugin": {
+      "types": "./dist/integration-plugin.d.ts",
+      "default": "./dist/integration-plugin.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "files": [

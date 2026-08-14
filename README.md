@@ -1,6 +1,6 @@
 # dsh-workspace-overlay
 
-DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis scope（`workspaceCordis` service）。同一 workspace 的所有消费者（session、agent）租用同一个 scope；最后一个租约释放时 scope 被 dispose。可选地，首个租约会把 `<workspace>/.dsh/cordis.yml` 挂载为该 workspace 的 Cordis composition。
+DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis scope（`workspaceCordis` service）。同一 workspace 的所有消费者（session、agent）租用同一个 scope；最后一个租约释放时 scope 被 dispose。可选地，首个租约会把 `<workspace>/.dsh/cordis.yml` 挂载为该 workspace 的 Cordis composition；bundle 同时接线 Agent 集成：`ctx.agents.create/resume` 前置 workspace 绑定，官方 `agentPresets` 的 mount/composeFrom/recompose 被 decorator 接管为 workspace-local preset generation（见下文「Agent 集成」）。
 
 目标 DSH：`0.1.0-rc.6`（`@deepseek-ai/cordis` 4.0.1、`@deepseek-ai/dsh-scope` 0.1.0-rc.6、`@deepseek-ai/cordis-plugin-include` 1.0.6、`@deepseek-ai/cordis-plugin-loader` 1.0.2、`@deepseek-ai/dsh-agent-presets` 0.1.0-rc.6），均为 peer + dev 依赖，版本与安装版一致。
 
@@ -26,7 +26,7 @@ DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis sc
 dsh plugin --profile web add /path/to/dsh-workspace-overlay
 ```
 
-包内 `dsh.bundle.patch`（`cordis.patch.yml`）插入 `workspace-registry` 行。
+包内 `dsh.bundle.patch`（`cordis.patch.yml`）插入两行：`workspace-registry`（`workspaceCordis` provider）与 `workspace-agent-integration`（`dsh-workspace-overlay/integration-plugin`，AgentRegistry + agentPresets decorator 接线，见下文）。
 
 ## 开发
 
@@ -39,8 +39,18 @@ pnpm build
 
 `dist/` 由 `tsc` 构建；built-entry smoke test 在目标安装版 DSH 的 profile 依赖树中解析包名后验证。测试通过真实 Loader composition 引导：相对 specifier、裸 specifier（vitest 无 Node internal loader，测试以 stub resolver 记录路由并加载真实 fixture 包）、挂载审计、trust、single-flight、失败重试与 dispose 均有覆盖（`tests/fixtures/plugins/` 下的 fixture 插件经 Node internal loader 导入，测试通过 `globalThis` 观察其状态）。
 
-## Agent 集成（decorator 基础，尚未在 bundle 启用）
+## Agent 集成（bundle 已启用）
 
-`./coordinator`（`AgentBindingCoordinator`）、`./method-wrapper`（`installMethodWrapper`）、`./agent-registry-decorator`（`installAgentRegistryDecorators`）与 `./agent-integration`（`installAgentIntegration`）实现了 AgentRegistry `create`/`resume` 的 workspace 绑定基础：组合 setup 先 `acquire(cwd)` 再 `bind(agentKey, lease.key)`，lease 由 agent scope effect 持有，setup/commit/publish 失败与 Agent dispose 都会释放。
+`cordis.patch.yml` 现在插入两行：`workspace-registry`（provider）与 `workspace-agent-integration`（`dsh-workspace-overlay/integration-plugin`）。官方 `agent-presets` row 原样保留；integration 行通过 `inject = ['agents', 'agentPresets', 'workspaceCordis']` 等到三个服务就绪后，可逆地包装 provider-owned 的 `ctx.agents.create/resume` 与 `ctx.agentPresets.mount/composeFrom/recompose`（共用同一个 `AgentBindingCoordinator` 与 `WorkspacePresetRegistry`，dispose 按逆序恢复全部 5 个 method descriptor）。
 
-**这些模块目前只是可测试的库代码，decorator 尚未在任何 bundle/profile 中启用**（`cordis.patch.yml` 只注册 `workspace-registry`，`agent-integration` 也没有被任何入口引用）。不要在 profile 中手工挂载它们：官方 `agentPresets` provider 仍会直接对 agent scope key 执行 `bindScopeParent`，提前启用会在 Web 官方 preset 上造成二次 bind（首次 workspace bind 后官方 mount 抛错）。待 `agentPresets` decorator 与 workspace-local preset generation 同提交接通后再启用，届时两者共用同一个 `AgentBindingCoordinator`。
+### 支持的 Agent 创建入口
+
+- **Web 以及所有走公开异步 `ctx.agents.create/resume` 的 consumer**（ACP、SDK/headless、in-process subagent driver）：组合 setup 先 `acquire(cwd)` 再 `bind(agentKey, lease.key)`，随后调用方 setup 里的官方 `agentPresets.mount` 被 decorator 接管：resolve + broken 检查 → 按 `(workspace, preset, 文件 stat stamp)` 确保 workspace-local preset generation（`createScope(lease.ctx, genKey, { parent: lease.key })` 下挂载官方 `mountPreset()`，同一 workspace 多 Agent 共享同一 generation，stamp 变化生成新 generation，旧 superseded generation 在 joined 归零时 dispose）→ rebind agent 到 generation key 并平衡 joined 计数。subagent 的同步 `composeFrom` 继承 parent 的 exact generation（无 I/O、不重挂载；跨 workspace 或 parent 无本 coordinator 记录时明确拒绝/保持 rosterless）；blank-session `recompose` 同样在 workspace 内切换 generation。
+- Agent 的 direct parent 是 `mountPreset()` 登记的 generation key，因此官方 `standingMountFor()`／`composedPreset()`／`serviceFor()` 无需包装即可沿 `agent → workspace-local preset` 解析（集成测试证明）。
+- Agent scope 的 effect disposer 统一走 `coordinator.unbind()`：先 leave preset generation，再 release workspace lease。
+
+### 明确不支持的路径
+
+- **同步旁路**：`AgentLoop.create(id, options, meta)` 与直接调用 factory 的 `createAgent/resume` 没有 awaited setup seam，不会获得 workspace 绑定——启用本 bundle 的 profile 不得包含配置驱动的同步 Agent entries。
+- **decorator 自身的 live HMR**：decorator 是启动结构插件，开发自身时需先 dispose 全部 live Agent 或重启 Host；Host 正常 teardown 与无 live Agent 的 fiber dispose 会完整恢复 5 个 method 并清理 registry（已测试）。
+- **冷 transcript 恢复**：`standingKeyFor()` 继续走官方 global standing，不带 workspace 参数。

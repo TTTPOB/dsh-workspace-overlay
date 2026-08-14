@@ -88,6 +88,46 @@ export function markerRow(marker: string): string {
 }
 
 /**
+ * Seed one preset directory under `presetsRoot` with the fixture plugins and
+ * the given composition, exactly as discovery expects (`agent.cordis.yml`
+ * beside the plugins). Returns the preset directory.
+ */
+export async function seedPreset(presetsRoot: string, id: string, composition: string): Promise<string> {
+  const dir = join(presetsRoot, id)
+  await mkdir(join(dir, 'plugins'), { recursive: true })
+  for (const file of ['contribute.js', 'global-service.js']) {
+    await cp(join(FIXTURES, 'plugins', file), join(dir, 'plugins', file))
+  }
+  await writeFile(join(dir, 'agent.cordis.yml'), composition)
+  return dir
+}
+
+/** A one-row preset composition whose single row seeds the given marker. */
+export function markerPreset(marker: string): string {
+  return [
+    '- id: marker',
+    '  name: ./plugins/contribute.js',
+    '  config:',
+    `    marker: ${marker}`,
+    '',
+  ].join('\n')
+}
+
+/** A preset composition publishing one service behind an isolate realm. */
+export function isolatedPreset(service: string, label: string): string {
+  return [
+    '- id: svc',
+    '  name: ./plugins/global-service.js',
+    '  isolate:',
+    `    ${service}: true`,
+    '  config:',
+    `    service: ${service}`,
+    `    label: ${label}`,
+    '',
+  ].join('\n')
+}
+
+/**
  * The observable state the fixture plugins publish.
  *
  * State crosses through globalThis because the Loader imports fixture modules

@@ -10,15 +10,16 @@
  * our record and releases the lease — the parent edge itself lives and dies
  * with the agent scope.
  *
- * The record deliberately leaves room for the next commit: the exact
- * workspace-local preset generation key (`presetKey`) will be stored here by
- * the agentPresets decorator so blank-session recompose and subagent
- * `composeFrom()` can rebind through the same unique binding.
+ * The record is the agentPresets decorator's storage for the exact
+ * workspace-local preset generation the agent runs on (`preset`), so
+ * blank-session recompose and subagent `composeFrom()` can rebind through the
+ * same unique binding and keep the joined counts balanced.
  *
  * @module dsh-workspace-overlay/coordinator
  */
 import { bindScopeParent, type ScopeKey, type ScopeParentBinding } from '@deepseek-ai/dsh-scope'
 import type { WorkspaceLease } from './registry.js'
+import type { PresetGeneration } from './workspace-presets.js'
 
 /** One live agent's workspace binding. */
 export interface AgentBindingRecord {
@@ -26,10 +27,13 @@ export interface AgentBindingRecord {
   readonly agentKey: ScopeKey
   /** The workspace lease this agent holds; released exactly once on unbind. */
   readonly lease: WorkspaceLease
-  /** The unique parent binding; the future agentPresets decorator rebinds it. */
+  /** The unique parent binding; the agentPresets decorator rebinds it. */
   readonly binding: ScopeParentBinding
-  /** Placeholder: exact workspace-local preset generation key (next commit). */
-  readonly presetKey?: ScopeKey
+  /**
+   * The exact workspace-local preset generation the agent is joined to, or
+   * undefined while the agent sits directly on the workspace layer.
+   */
+  preset?: PresetGeneration
 }
 
 /** Coordinates agent scope keys with the workspace leases they hold. */
@@ -67,7 +71,32 @@ export class AgentBindingCoordinator {
   }
 
   /**
-   * Drop the record and release the workspace lease. Idempotent, and safe as
+   * Re-link the agent to `generation`'s scope key and balance the joined
+   * counts: the previous generation (if any) is left, the new one joined.
+   *
+   * Used by mount, blank-session recompose, and synchronous `composeFrom`
+   * alike — all three are a parent re-link through the record's binding. The
+   * rebind happens first, so a cycle rejection (unreachable here: the
+   * generation is a fresh child of the workspace scope) leaves both the
+   * binding and the counts untouched; a re-join of the generation the agent
+   * already runs on is a no-op.
+   */
+  switchPreset(agentKey: ScopeKey, generation: PresetGeneration): void {
+    const record = this.records.get(agentKey)
+    if (!record) {
+      throw new Error('agent-presets: agent has no live workspace binding; cannot join a preset generation')
+    }
+    record.binding.rebind(generation.key)
+    if (record.preset === generation) return
+    record.preset?.leave()
+    generation.join()
+    record.preset = generation
+  }
+
+  /**
+   * Drop the record and release the workspace lease. The preset generation is
+   * left FIRST — an idle superseded generation disposes here, before the
+   * lease release can tear the workspace scope down. Idempotent, and safe as
    * an async Cordis effect disposer: the effect machinery awaits the returned
    * promise, so the final lease release disposes the workspace scope only
    * after the agent scope has unwound.
@@ -75,6 +104,7 @@ export class AgentBindingCoordinator {
   unbind(agentKey: ScopeKey): Promise<void> {
     const record = this.records.get(agentKey)
     if (!record) return Promise.resolve()
+    record.preset?.leave()
     this.records.delete(agentKey)
     this.live -= 1
     return Promise.resolve(record.lease.release())
