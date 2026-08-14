@@ -1,13 +1,37 @@
 {
   "name": "dsh-workspace-overlay",
   "version": "0.1.0",
-  "description": "Out-of-tree DSH plugin: canonical per-workspace Cordis scopes (workspaceCordis) with optional <workspace>/.dsh/cordis.yml composition mounting.",
+  "description": "Out-of-tree DSH plugin: canonical per-workspace Cordis scopes (workspaceCordis) with optional <workspace>/.dsh/cordis.yml composition mounting; rc.6-compatible MCP core (transport/tools/connection supervisor) under ./mcp.",
   "type": "module",
   "main": "./dist/registry.js",
   "exports": {
     ".": {
       "types": "./dist/registry.d.ts",
       "default": "./dist/registry.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "default": "./dist/mcp/index.js"
+    },
+    "./mcp/types": {
+      "types": "./dist/mcp/types.d.ts",
+      "default": "./dist/mcp/types.js"
+    },
+    "./mcp/config": {
+      "types": "./dist/mcp/config.d.ts",
+      "default": "./dist/mcp/config.js"
+    },
+    "./mcp/transport": {
+      "types": "./dist/mcp/transport.d.ts",
+      "default": "./dist/mcp/transport.js"
+    },
+    "./mcp/tools": {
+      "types": "./dist/mcp/tools.d.ts",
+      "default": "./dist/mcp/tools.js"
+    },
+    "./mcp/connection": {
+      "types": "./dist/mcp/connection.d.ts",
+      "default": "./dist/mcp/connection.js"
     },
     "./registry": {
       "types": "./dist/registry.d.ts",
@@ -70,10 +94,15 @@
     "@deepseek-ai/cordis-plugin-loader": "^1.0.2",
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-agent-presets": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-scope": "^0.1.0-rc.6"
+    "@deepseek-ai/dsh-scope": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-subprocess": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-timeout": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
@@ -82,7 +111,13 @@
     "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
     "@deepseek-ai/dsh-agent-presets": "0.1.0-rc.6",
     "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-mcp-client": "0.1.0-rc.6",
     "@deepseek-ai/dsh-scope": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-subprocess": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-timeout": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
