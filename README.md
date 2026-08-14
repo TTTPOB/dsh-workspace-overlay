@@ -38,3 +38,9 @@ pnpm build
 ```
 
 `dist/` 由 `tsc` 构建；built-entry smoke test 在目标安装版 DSH 的 profile 依赖树中解析包名后验证。测试通过真实 Loader composition 引导：相对 specifier、裸 specifier（vitest 无 Node internal loader，测试以 stub resolver 记录路由并加载真实 fixture 包）、挂载审计、trust、single-flight、失败重试与 dispose 均有覆盖（`tests/fixtures/plugins/` 下的 fixture 插件经 Node internal loader 导入，测试通过 `globalThis` 观察其状态）。
+
+## Agent 集成（decorator 基础，尚未在 bundle 启用）
+
+`./coordinator`（`AgentBindingCoordinator`）、`./method-wrapper`（`installMethodWrapper`）、`./agent-registry-decorator`（`installAgentRegistryDecorators`）与 `./agent-integration`（`installAgentIntegration`）实现了 AgentRegistry `create`/`resume` 的 workspace 绑定基础：组合 setup 先 `acquire(cwd)` 再 `bind(agentKey, lease.key)`，lease 由 agent scope effect 持有，setup/commit/publish 失败与 Agent dispose 都会释放。
+
+**这些模块目前只是可测试的库代码，decorator 尚未在任何 bundle/profile 中启用**（`cordis.patch.yml` 只注册 `workspace-registry`，`agent-integration` 也没有被任何入口引用）。不要在 profile 中手工挂载它们：官方 `agentPresets` provider 仍会直接对 agent scope key 执行 `bindScopeParent`，提前启用会在 Web 官方 preset 上造成二次 bind（首次 workspace bind 后官方 mount 抛错）。待 `agentPresets` decorator 与 workspace-local preset generation 同提交接通后再启用，届时两者共用同一个 `AgentBindingCoordinator`。
