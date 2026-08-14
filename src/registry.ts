@@ -5,6 +5,15 @@
  * Every consumer of a workspace (sessions, agents) leases the same scope and
  * shares it; the scope is disposed when the last lease is released.
  *
+ * The first entry for a workspace reads `<workspace>/.dsh/cordis.yml` and,
+ * when the registry trusts workspace configs, mounts it as a workspace
+ * composition under the scope before the first lease is handed out. The
+ * mount is single-flight with entry creation: concurrent acquires of one
+ * workspace share one mount, a failed mount disposes the scope and leaves
+ * nothing cached, and a later acquire retries the fixed file. Untrusted
+ * workspaces are never read, parsed, or imported — they still get an empty
+ * scope so their consumers inherit the host composition unchanged.
+ *
  * @module dsh-workspace-overlay
  */
 import { Service, type Context } from '@deepseek-ai/cordis'
@@ -12,11 +21,16 @@ import { createScope, type Scope, type ScopeKey } from '@deepseek-ai/dsh-scope'
 import z from '@deepseek-ai/schemastery'
 import { realpath, stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
+import {
+  mountWorkspaceTree,
+  workspaceConfigPath,
+  type MountedWorkspaceTree,
+} from './workspace-tree.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** Canonical per-workspace scope registry (provider: dsh-workspace-overlay). */
-    workspaceRegistry: WorkspaceRegistry
+    /** Canonical per-workspace Cordis scope registry. */
+    workspaceCordis: WorkspaceRegistry
   }
 }
 
@@ -45,6 +59,14 @@ export class WorkspaceNotDirectoryError extends Error {
   }
 }
 
+/** Read-only debug snapshot of one live workspace composition. */
+export interface WorkspaceCompositionInfo {
+  /** Absolute path of the mounted config file. */
+  readonly path: string
+  /** True while the composition subtree is still alive. */
+  readonly active: boolean
+}
+
 /** Read-only debug snapshot of one live workspace entry. */
 export interface WorkspaceInfo {
   /** Canonical (realpath) workspace path. */
@@ -54,6 +76,10 @@ export interface WorkspaceInfo {
   /** True once the final release ran. */
   disposed: boolean
   trustWorkspaceConfig: boolean
+  /** True when `<root>/.dsh/cordis.yml` existed when the entry was created. */
+  configured: boolean
+  /** The mounted composition, when trust enabled and a config file exists. */
+  composition?: WorkspaceCompositionInfo
 }
 
 /**
@@ -68,6 +94,10 @@ export interface WorkspaceLease {
   /** Canonical (realpath) workspace path. */
   readonly canonical: string
   readonly trustWorkspaceConfig: boolean
+  /** True when `<root>/.dsh/cordis.yml` existed when the entry was created. */
+  readonly configured: boolean
+  /** The mounted composition, when trust enabled and a config file exists. */
+  readonly composition?: WorkspaceCompositionInfo
   /** Release this lease. Idempotent; the final release disposes the scope. */
   release(): Promise<void>
 }
@@ -80,6 +110,13 @@ interface WorkspaceEntry {
   leases: number
   disposed: boolean
   trustWorkspaceConfig: boolean
+  configured: boolean
+  /**
+   * Present when a trusted config file was mounted. The subtree is owned by
+   * the scope: the final release's `scope.dispose()` unwinds it, so no
+   * separate composition disposer is needed (kept for status/diagnostics).
+   */
+  composition?: MountedWorkspaceTree
 }
 
 /** Rejects `cwd` unless it is an absolute path to an existing directory. */
@@ -112,12 +149,24 @@ function isEnoent(err: unknown): boolean {
   return (err as NodeJS.ErrnoException)?.code === 'ENOENT'
 }
 
+/** Whether `path` exists; ENOENT is the only tolerated failure. */
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch (err) {
+    if (isEnoent(err)) return false
+    throw err
+  }
+}
+
 class LeaseImpl implements WorkspaceLease {
   private releasing: Promise<void> | undefined
   readonly key: ScopeKey
   readonly ctx: Context
   readonly canonical: string
   readonly trustWorkspaceConfig: boolean
+  readonly configured: boolean
 
   constructor(
     private readonly entry: WorkspaceEntry,
@@ -127,6 +176,16 @@ class LeaseImpl implements WorkspaceLease {
     this.ctx = entry.scope.ctx
     this.canonical = entry.canonical
     this.trustWorkspaceConfig = entry.trustWorkspaceConfig
+    this.configured = entry.configured
+  }
+
+  get composition(): WorkspaceCompositionInfo | undefined {
+    const mounted = this.entry.composition
+    if (!mounted) return undefined
+    return {
+      path: workspaceConfigPath(this.entry.canonical),
+      active: mounted.fiber.uid !== null,
+    }
   }
 
   release(): Promise<void> {
@@ -139,12 +198,15 @@ export default class WorkspaceRegistry extends Service {
     trustWorkspaceConfig: z.boolean().default(true),
   }) as z<WorkspaceRegistryConfig>
 
+  /** The loader supplies the host base bare specifiers resolve against. */
+  static inject = ['loader']
+
   private readonly entries = new Map<string, WorkspaceEntry>()
   private readonly inflight = new Map<string, Promise<WorkspaceEntry>>()
   private readonly selfCtx: Context
 
   constructor(ctx: Context, private readonly config: WorkspaceRegistryConfig = defaultConfig) {
-    super(ctx, 'workspaceRegistry')
+    super(ctx, 'workspaceCordis')
     this.selfCtx = ctx
   }
 
@@ -157,11 +219,19 @@ export default class WorkspaceRegistry extends Service {
   get(canonical: string): WorkspaceInfo | undefined {
     const entry = this.entries.get(canonical)
     if (!entry) return undefined
+    const composition = entry.composition
     return {
       canonical: entry.canonical,
       leases: entry.leases,
       disposed: entry.disposed,
       trustWorkspaceConfig: entry.trustWorkspaceConfig,
+      configured: entry.configured,
+      ...(composition && {
+        composition: {
+          path: workspaceConfigPath(entry.canonical),
+          active: composition.fiber.uid !== null,
+        },
+      }),
     }
   }
 
@@ -169,6 +239,8 @@ export default class WorkspaceRegistry extends Service {
    * Acquire the workspace scope for `cwd` (absolute, existing directory;
    * canonicalized via `realpath(resolve(cwd))`). Concurrent acquires share one
    * entry via single-flight; failures leave no cached state and are retryable.
+   * The first acquire mounts the workspace composition, so it resolves only
+   * once every row is usable.
    */
   async acquire(cwd: string): Promise<WorkspaceLease> {
     const canonical = await canonicalize(cwd)
@@ -190,10 +262,16 @@ export default class WorkspaceRegistry extends Service {
     const creating = this.createEntry(canonical)
     this.inflight.set(canonical, creating)
     void creating
-      .then((entry) => {
-        // Publish only after the scope exists; rejections never cache.
-        this.entries.set(canonical, entry)
-      })
+      .then(
+        (entry) => {
+          // Publish only after the scope exists; rejections never cache.
+          this.entries.set(canonical, entry)
+        },
+        () => {
+          // The rejection is delivered to every acquire() awaiting `creating`;
+          // this bookkeeping chain must not become an unhandled rejection.
+        },
+      )
       .finally(() => {
         this.inflight.delete(canonical)
       })
@@ -203,13 +281,29 @@ export default class WorkspaceRegistry extends Service {
   private async createEntry(canonical: string): Promise<WorkspaceEntry> {
     const key: ScopeKey = {}
     const scope = createScope(this.selfCtx, key)
-    return {
-      canonical,
-      key,
-      scope,
-      leases: 0,
-      disposed: false,
-      trustWorkspaceConfig: this.config.trustWorkspaceConfig,
+    try {
+      // Existence is a stat; the file is only read/parsed/imported when trust
+      // is enabled, so an untrusted workspace still gets its empty scope.
+      const configured = await exists(workspaceConfigPath(canonical))
+      const composition = configured && this.config.trustWorkspaceConfig
+        ? await mountWorkspaceTree(scope.ctx, canonical)
+        : undefined
+      return {
+        canonical,
+        key,
+        scope,
+        leases: 0,
+        disposed: false,
+        trustWorkspaceConfig: this.config.trustWorkspaceConfig,
+        configured,
+        composition,
+      }
+    } catch (error) {
+      // The subtree (if any) is owned by the scope; disposing the scope
+      // unwinds it, and a rejected entry is never cached, so the next acquire
+      // retries the workspace from a fresh scope.
+      await scope.dispose()
+      throw error
     }
   }
 

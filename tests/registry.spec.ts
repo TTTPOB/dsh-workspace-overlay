@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Context, type Fiber } from '@deepseek-ai/cordis'
+import Loader from '@deepseek-ai/cordis-plugin-loader'
+import Include from '@deepseek-ai/cordis-plugin-include'
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -31,8 +33,12 @@ function trackDisposal(lease: WorkspaceLease): () => boolean {
 
 beforeEach(async () => {
   ctx = new Context()
+  // The registry injects the loader; a real loader composition also exercises
+  // the host base every workspace scope inherits.
+  await ctx.plugin(Loader)
+  ctx.loader.builtins.include = Include
   registryFiber = await ctx.plugin(WorkspaceRegistry)
-  registry = ctx.workspaceRegistry
+  registry = ctx.workspaceCordis
   root = await mkdtemp(join(tmpdir(), 'dsh-ws-overlay-'))
 })
 
@@ -42,7 +48,7 @@ afterEach(async () => {
 })
 
 describe('WorkspaceRegistry', () => {
-  it('registers itself as ctx.workspaceRegistry', () => {
+  it('registers itself as ctx.workspaceCordis', () => {
     expect(registry.size).toBe(0)
   })
 
@@ -167,8 +173,9 @@ describe('WorkspaceRegistry', () => {
     expect(lease.trustWorkspaceConfig).toBe(true)
 
     const other = new Context()
+    await other.plugin(Loader)
     const otherFiber = await other.plugin(WorkspaceRegistry, { trustWorkspaceConfig: false })
-    const otherLease = await other.workspaceRegistry.acquire(dir)
+    const otherLease = await other.workspaceCordis.acquire(dir)
     expect(otherLease.trustWorkspaceConfig).toBe(false)
     await otherFiber.dispose()
   })

@@ -1,7 +1,7 @@
 {
   "name": "dsh-workspace-overlay",
   "version": "0.1.0",
-  "description": "Out-of-tree DSH plugin: canonical per-workspace Cordis scopes via the workspaceRegistry service.",
+  "description": "Out-of-tree DSH plugin: canonical per-workspace Cordis scopes (workspaceCordis) with optional <workspace>/.dsh/cordis.yml composition mounting.",
   "type": "module",
   "main": "./dist/registry.js",
   "exports": {
@@ -12,6 +12,10 @@
     "./registry": {
       "types": "./dist/registry.d.ts",
       "default": "./dist/registry.js"
+    },
+    "./workspace-tree": {
+      "types": "./dist/workspace-tree.d.ts",
+      "default": "./dist/workspace-tree.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
@@ -34,6 +38,9 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/cordis-plugin-include": "^1.0.6",
+    "@deepseek-ai/cordis-plugin-loader": "^1.0.2",
+    "@deepseek-ai/dsh-agent-presets": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-scope": "^0.1.0-rc.6"
   },
   "dependencies": {
@@ -41,6 +48,9 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/cordis-plugin-include": "1.0.6",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.2",
+    "@deepseek-ai/dsh-agent-presets": "0.1.0-rc.6",
     "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-scope": "0.1.0-rc.6",
     "@types/node": "^24.0.0",

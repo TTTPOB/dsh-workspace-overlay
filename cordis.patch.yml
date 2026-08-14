@@ -1,6 +1,8 @@
-# dsh-workspace-overlay bundle patch: register the workspaceRegistry provider.
+# dsh-workspace-overlay bundle patch: register the workspaceCordis provider.
 # Applied as a bundle layer; the row references this package by name so the
 # profile's own dependency tree resolves it (see docs/user/develop/basic/publish).
+# The provider activates only once the host Loader exists (static inject), so
+# the first acquire of a workspace can mount <workspace>/.dsh/cordis.yml.
 - insert:
     - id: workspace-registry
       name: dsh-workspace-overlay

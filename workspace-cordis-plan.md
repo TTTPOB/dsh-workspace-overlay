@@ -226,7 +226,7 @@ AgentRegistry decorator可逆包装公开的`ctx.agents.create()`和`resume()`�
 ```text
 combined setup(agentCtx)
   → scopeOf(agentCtx)取得Agent对象和session.header.cwd
-  → await workspaceRegistry.acquire(cwd)
+  → await ctx.workspaceCordis.acquire(cwd)
   → bind Agent key → workspace key，并保存唯一ScopeParentBinding
   → 在agentCtx effect中登记幂等lease release
   → await调用方原setup(agentCtx)
@@ -303,7 +303,7 @@ v1据此收窄“任意Cordis row”承诺：
 - 支持通过scope-aware registry／event贡献能力的row，例如tools、prompt sections、skills、commands、MCP adapter和scoped listeners。
 - Workspace tree从registry provider自己的untraced Host context创建workspace scope；preset scope由`createScope(workspace.ctx, presetKey)`创建，但这只安排scope key，仍不会自动穿越Cordis isolate realm。
 - Workspace composition内部的provider/consumer只有处在同一显式isolate group时才能互相inject；workspace sibling、preset row和Agent都不能假定能注入该service。
-- Preset或Agent若需要workspace状态，使用Host-global稳定service API加调用scope，或通过`workspaceRegistry.serviceFor(agent, name)`显式寻址composition fiber；不能用普通`inject`／`ctx.get()`假装继承。
+- Preset或Agent若需要workspace状态，使用Host-global稳定service API加调用scope，或通过`ctx.workspaceCordis.serviceFor(agent, name)`显式寻址composition fiber；不能用普通`inject`／`ctx.get()`假装继承。
 - v1不承诺任意第三方Host service在Agent中透明可注入；缺少显式consumer seam的row在activation audit中拒绝或记录为unsupported。
 
 这与官方preset的`serviceFor(agent, name)`模式一致：Host调用者先持有Agent，再显式读取该composition fiber内的service，而不是把session-local provider暴露为Host-global injection。
