@@ -52,6 +52,24 @@ describe('WorkspaceRegistry', () => {
     expect(registry.size).toBe(0)
   })
 
+  it('maps a live workspace scope key to its canonical root and nothing else', async () => {
+    const dir = await makeWorkspace('mapped')
+    const lease = await registry.acquire(dir)
+
+    expect(registry.workspaceForScope(lease.key)).toBe(await realpath(dir))
+    // A foreign key is not a workspace scope.
+    expect(registry.workspaceForScope({})).toBeUndefined()
+
+    // A fresh entry generation mints a fresh key for the same root; the old
+    // key stops resolving as soon as its final lease has disposed the entry.
+    await lease.release()
+    expect(registry.workspaceForScope(lease.key)).toBeUndefined()
+    const again = await registry.acquire(dir)
+    expect(again.key).not.toBe(lease.key)
+    expect(registry.workspaceForScope(again.key)).toBe(await realpath(dir))
+    await again.release()
+  })
+
   it('shares one entry between two acquires of the same directory', async () => {
     const dir = await makeWorkspace('shared')
     const first = await registry.acquire(dir)

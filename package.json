@@ -33,6 +33,14 @@
       "types": "./dist/mcp/connection.d.ts",
       "default": "./dist/mcp/connection.js"
     },
+    "./mcp/manager": {
+      "types": "./dist/mcp/manager.d.ts",
+      "default": "./dist/mcp/manager.js"
+    },
+    "./mcp/workspace-client": {
+      "types": "./dist/mcp/workspace-client.d.ts",
+      "default": "./dist/mcp/workspace-client.js"
+    },
     "./registry": {
       "types": "./dist/registry.d.ts",
       "default": "./dist/registry.js"

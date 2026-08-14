@@ -1,15 +1,20 @@
-# dsh-workspace-overlay bundle patch: register the workspaceCordis provider and
-# wire the workspace-agent integration (AgentRegistry + agentPresets
-# decorators). Applied as a bundle layer; the rows reference this package by
-# name so the profile's own dependency tree resolves them (see
-# docs/user/develop/basic/publish). The official agent-presets row stays
-# untouched: the decorators wrap its provider target at activation, and the
-# integration row's inject waits until agents/agentPresets/workspaceCordis
-# are all available.
+# dsh-workspace-overlay bundle patch: register the workspaceCordis provider, the
+# workspace-aware MCP manager, and the workspace-agent integration
+# (AgentRegistry + agentPresets decorators). Applied as a bundle layer; the
+# rows reference this package by name so the profile's own dependency tree
+# resolves them (see docs/user/develop/basic/publish). The official
+# agent-presets row stays untouched: the decorators wrap its provider target
+# at activation, and the integration row's inject waits until
+# agents/agentPresets/workspaceCordis are all available. The MCP manager row
+# declares no default server — global MCP rows are added by profile patch via
+# dsh-workspace-overlay/mcp/workspace-client, workspace rows live in each
+# workspace's <workspace>/.dsh/cordis.yml (see the README).
 - insert:
     - id: workspace-registry
       name: dsh-workspace-overlay
       config:
         trustWorkspaceConfig: true
+    - id: workspace-mcp-manager
+      name: dsh-workspace-overlay/mcp/manager
     - id: workspace-agent-integration
       name: dsh-workspace-overlay/integration-plugin

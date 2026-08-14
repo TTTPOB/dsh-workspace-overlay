@@ -11,8 +11,9 @@
  *
  * Environment:
  * - MCP_FIXTURE_MODE: 'normal' | 'exit-on-start' | 'dup-list' |
- *   'bad-schema-list' | 'paginate' (default 'normal')
+ *   'bad-schema-list' | 'paginate' | 'masked' | 'masked-partial' (default 'normal')
  * - MCP_FIXTURE_PAGE_SIZE: page size for 'paginate' (default 3)
+ * - MCP_FIXTURE_MASKED_COUNT: tool count for 'masked' (default 5)
  * - MCP_FIXTURE_FAIL_LIST_AFTER: fail `tools/list` after N successful replies
  *   (injected list failure for the keep-previous-generation path)
  * - MCP_FIXTURE_MARKER: append `start <pid>` on boot and `exit <pid>` on exit
@@ -230,6 +231,29 @@ server.setRequestHandler(ListToolsRequestSchema, async request => {
       const page = all.slice(start, start + pageSize)
       const next = start + pageSize < all.length ? String(start + pageSize) : undefined
       return { tools: page, nextCursor: next }
+    }
+    case 'masked': {
+      // Namespace-mask tests: a server exposing only t1..tN.
+      const count = Math.max(1, Number(process.env.MCP_FIXTURE_MASKED_COUNT ?? '5'))
+      return {
+        tools: Array.from({ length: count }, (_, i) => ({
+          name: `t${i + 1}`,
+          description: `Masked tool ${i + 1}.`,
+          inputSchema: { type: 'object' },
+        })),
+      }
+    }
+    case 'masked-partial': {
+      // The override side of the namespace-mask tests: t1..tN (default 3),
+      // a subset of the global 'masked' list.
+      const count = Math.max(1, Number(process.env.MCP_FIXTURE_MASKED_COUNT ?? '3'))
+      return {
+        tools: Array.from({ length: count }, (_, i) => ({
+          name: `t${i + 1}`,
+          description: `Override tool ${i + 1}.`,
+          inputSchema: { type: 'object' },
+        })),
+      }
     }
     default:
       return { tools: all }

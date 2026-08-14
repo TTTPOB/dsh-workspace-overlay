@@ -203,11 +203,29 @@ export default class WorkspaceRegistry extends Service {
 
   private readonly entries = new Map<string, WorkspaceEntry>()
   private readonly inflight = new Map<string, Promise<WorkspaceEntry>>()
+  /**
+   * Scope identity → canonical workspace root, for consumers that must resolve
+   * a workspace scope key back to its root without guessing cwd/process.cwd
+   * (the workspace-aware MCP manager). Keyed by the opaque per-generation
+   * scope key, so a disposed entry's mapping dies with its scope and a fresh
+   * generation mints a fresh key.
+   */
+  private readonly scopeRoots = new WeakMap<ScopeKey, string>()
   private readonly selfCtx: Context
 
   constructor(ctx: Context, private readonly config: WorkspaceRegistryConfig = defaultConfig) {
     super(ctx, 'workspaceCordis')
     this.selfCtx = ctx
+  }
+
+  /**
+   * The canonical root of a live workspace scope key, or undefined when the
+   * key is not (or no longer is) a workspace entry's scope. The registry is
+   * the only authority on the workspace-root mapping, so consumers never
+   * resolve workspace identity from ambient cwd.
+   */
+  workspaceForScope(key: ScopeKey): string | undefined {
+    return this.scopeRoots.get(key)
   }
 
   /** Number of live workspace entries (debug). */
@@ -280,6 +298,7 @@ export default class WorkspaceRegistry extends Service {
 
   private async createEntry(canonical: string): Promise<WorkspaceEntry> {
     const key: ScopeKey = {}
+    this.scopeRoots.set(key, canonical)
     const scope = createScope(this.selfCtx, key)
     try {
       // Existence is a stat; the file is only read/parsed/imported when trust
@@ -302,6 +321,7 @@ export default class WorkspaceRegistry extends Service {
       // The subtree (if any) is owned by the scope; disposing the scope
       // unwinds it, and a rejected entry is never cached, so the next acquire
       // retries the workspace from a fresh scope.
+      this.scopeRoots.delete(key)
       await scope.dispose()
       throw error
     }
@@ -315,6 +335,7 @@ export default class WorkspaceRegistry extends Service {
     // leaves the workspace retryable with a fresh scope, then await disposal.
     entry.disposed = true
     this.entries.delete(entry.canonical)
+    this.scopeRoots.delete(entry.key)
     return Promise.resolve(entry.scope.dispose()).then(() => undefined)
   }
 }
