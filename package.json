@@ -49,6 +49,10 @@
       "types": "./dist/workspace-tree.d.ts",
       "default": "./dist/workspace-tree.js"
     },
+    "./workspace-reload-controller": {
+      "types": "./dist/workspace-reload-controller.d.ts",
+      "default": "./dist/workspace-reload-controller.js"
+    },
     "./method-wrapper": {
       "types": "./dist/method-wrapper.d.ts",
       "default": "./dist/method-wrapper.js"
@@ -112,6 +116,7 @@
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
     "@modelcontextprotocol/sdk": "^1.12.0",
+    "chokidar": "^4.0.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
