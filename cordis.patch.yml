@@ -9,11 +9,18 @@
 # declares no default server — global MCP rows are added by profile patch via
 # dsh-workspace-overlay/mcp/workspace-client, workspace rows live in each
 # workspace's <workspace>/.dsh/cordis.yml (see the README).
+#
+# The workspace-registry config below states the full deployed values
+# explicitly (patch rows replace the target row's whole config, never a deep
+# merge) so `dsh --dump-config` shows watchWorkspaceConfig/reloadDebounceMs
+# even though they equal the schema defaults.
 - insert:
     - id: workspace-registry
       name: dsh-workspace-overlay
       config:
         trustWorkspaceConfig: true
+        watchWorkspaceConfig: true
+        reloadDebounceMs: 150
     - id: workspace-mcp-manager
       name: dsh-workspace-overlay/mcp/manager
     - id: workspace-agent-integration

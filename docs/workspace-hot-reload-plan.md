@@ -1,6 +1,7 @@
 # Workspace composition hot reload plan
 
-Status: accepted implementation plan for the existing decorator-based architecture.
+Status: implemented. All four blocks are complete; the behaviors below describe
+the shipped plugin, not a proposal. The completion criteria in section 8 are met.
 
 ## 1. Objective
 
@@ -37,7 +38,7 @@ Reloads of different workspaces may run concurrently. Reloads of the same worksp
 
 ### 2.3 Failure behavior
 
-Initial acquire remains strict: if a trusted existing config fails to mount, `acquire()` rejects and leaves no cached workspace.
+Initial acquire remains strict: if a trusted existing config fails to mount, `acquire()` rejects and leaves no cached workspace. With watching enabled the acquire is also gated on the watcher's `ready` — a watcher that errors during startup rejects the acquire — and the strict stat/mount runs only after that gate, so no event can fall into a gap between the initial read and the watcher.
 
 A live reload is recoverable:
 
@@ -125,7 +126,7 @@ Responsibilities:
 - debounce event bursts;
 - serialize reload passes;
 - coalesce events that arrive while reloading;
-- expose a readiness gate: `ready` resolves when the watcher reports `ready` and rejects when the watcher errors during startup, and `activate()` starts event-driven work only after the owner's strict initial read — events before activation only mark the controller dirty and are replayed as exactly one pass (the registry's pass re-stats the file and skips a mount when nothing observably changed, closing the gap between the initial strict read and the watcher without a pointless double mount);
+- expose a readiness gate: `ready` resolves when the watcher reports `ready` and rejects when the watcher errors during startup (or when stopped first). The registry awaits `ready` BEFORE its strict initial stat and mount, so a change landing before that read is simply part of the mount and one landing while it runs is covered by the watcher; `activate()` then starts event-driven work and replays any events that arrived before activation as exactly one pass — the pass re-stats the file and skips a mount when nothing observably changed, closing the gap without a pointless double mount;
 - stop, cancel, and quiesce idempotently, including before `ready` settles;
 - contain callback rejections so chokidar never creates an unhandled rejection;
 - report lifecycle events through callbacks without owning Registry maps.

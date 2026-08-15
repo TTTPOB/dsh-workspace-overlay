@@ -2,25 +2,49 @@
 
 > English version: [docs/README.en.md](docs/README.en.md)
 
-DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis scope（`workspaceCordis` service）。同一 workspace 的所有消费者（session、agent）租用同一个 scope；最后一个租约释放时 scope 被 dispose。可选地，首个租约会把 `<workspace>/.dsh/cordis.yml` 挂载为该 workspace 的 Cordis composition；bundle 同时接线 Agent 集成：`ctx.agents.create/resume` 前置 workspace 绑定，官方 `agentPresets` 的 mount/composeFrom/recompose 被 decorator 接管为 workspace-local preset generation（见下文「Agent 集成」）。`./mcp` 子路径提供从官方 rc.6 `@deepseek-ai/dsh-mcp-client` 移植的 MCP core（transport / tool sync / connection supervisor），以及 workspace-aware MCP manager + 插件入口（global 每 serverName 一进程、workspace override 每 workspace 一进程、继承 global 的 workspace 零额外进程、同名 namespace 整体遮蔽，见「MCP manager」）。
+DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis scope（`workspaceCordis` service）。同一 workspace 的所有消费者（session、agent）租用同一个 scope；最后一个租约释放时 scope 被 dispose。可选地，首个租约会把 `<workspace>/.dsh/cordis.yml` 挂载为该 workspace 的 Cordis composition，并默认监听该顶层配置文件——编辑保存即整树热重载（见「Workspace 热重载」）；bundle 同时接线 Agent 集成：`ctx.agents.create/resume` 前置 workspace 绑定，官方 `agentPresets` 的 mount/composeFrom/recompose 被 decorator 接管为 workspace-local preset generation（见下文「Agent 集成」）。`./mcp` 子路径提供从官方 rc.6 `@deepseek-ai/dsh-mcp-client` 移植的 MCP core（transport / tool sync / connection supervisor），以及 workspace-aware MCP manager + 插件入口（global 每 serverName 一进程、workspace override 每 workspace 一进程、继承 global 的 workspace 零额外进程、同名 namespace 整体遮蔽，见「MCP manager」）。
 
 目标 DSH：`0.1.0-rc.6`。运行时peer包括`@deepseek-ai/cordis` 4.0.1、`@deepseek-ai/dsh-scope` 0.1.0-rc.6、`@deepseek-ai/cordis-plugin-include` 1.0.6、`@deepseek-ai/cordis-plugin-loader` 1.0.2、`@deepseek-ai/dsh-agent-presets` 0.1.0-rc.6及代码实际import的DSH service包；版本均与安装版一致。`@deepseek-ai/dsh-mcp-client` 0.1.0-rc.6只作为开发依赖用于Config parity测试。
 
 ## API（`./registry`）
 
 - `WorkspaceRegistry extends Service`：默认导出；注册为 `ctx.workspaceCordis`（避免与 DSH Web 的持久 workspace 实体服务 `ctx.workspaceRegistry` 冲突）。`static inject = ['loader']`：provider 只在 Host Loader 存在时激活，workspace scope 继承 Host base，供裸包 specifier 解析。
-- `Config`：`trustWorkspaceConfig: boolean`，默认 `true`（是否信任 `<workspace>/.dsh/cordis.yml`）。
+- `Config`：`trustWorkspaceConfig: boolean`，默认 `true`（是否信任 `<workspace>/.dsh/cordis.yml`）；`watchWorkspaceConfig: boolean`，默认 `true`（是否监听该文件并在变化时热重载 composition；`trust=false` 时无效果）；`reloadDebounceMs: number`，默认 `150`（文件事件突发去抖窗口，非负整数，上限 `MAX_TIMER_DELAY_MS`）。
 - `acquire(cwd)`：`cwd` 必须为绝对路径且指向已存在目录；canonical 为 `realpath(resolve(cwd))`（symlink 归一）。同一 canonical 通过 Map + single-flight 共享一个 entry；并发 acquire 只挂载一次；失败不残留缓存、可重试。
-- 首次创建 entry 时：`<root>/.dsh/cordis.yml` 不存在 → 空 workspace scope（继承 global，不启动任何东西）；存在且 `trustWorkspaceConfig` → 挂载 composition，`acquire` 在全部 row 可用后才返回；存在但 `trust=false` → 只 stat 不读／parse／import，仍建立空 scope。
-- lease：`key`（不透明 ScopeKey）、`ctx`（scope-owned context）、`canonical`、`trustWorkspaceConfig`、`configured`、`composition`（`{ path, active }`，仅已挂载时存在）；`release()` 幂等，最后一次 release `await scope.dispose()` 并从 Map 删除——composition 子树由 scope 持有，随 scope dispose 完整清理（含 fixture 的 effect disposer）。
-- `size` / `get(canonical)`：只读调试视图，含 `configured` 与 `composition` 状态。
+- 首次创建 entry 时：`<root>/.dsh/cordis.yml` 不存在 → 空 workspace scope（继承 global，不启动任何东西）；存在且 `trustWorkspaceConfig` → 挂载 composition，`acquire` 在全部 row 可用后才返回；存在但 `trust=false` → 只 stat 不读／parse／import，仍建立空 scope。watching 开启时，首次 stat/mount 在 watcher `ready` 之后执行，watcher 启动失败会让 `acquire()` 拒绝。
+- lease：`key`（不透明 ScopeKey）、`ctx`（scope-owned context）、`canonical`、`trustWorkspaceConfig`、`configured`（**创建时刻快照**，live 状态用 `get(canonical)` 读）、`composition`（`{ path, active }`，仅已挂载时存在）；`release()` 幂等，最后一次 release 先从 Map 删除 entry，停止 watcher、取消 debounce、关闭并 drain reload controller，再 `await scope.dispose()`——当前 composition 子树由 scope 持有，随 scope dispose 完整清理（含 fixture 的 effect disposer）。
+- `size` / `get(canonical)`：只读调试视图，含 live `configured`、`composition` 状态，以及 watching 开启时的 `reload` 快照（`{ watching, status, successfulReloads }`，`status` ∈ `starting`/`idle`/`scheduled`/`reloading`/`failed`/`stopped`；调试 API 不暴露原始错误对象或 config 文本）。
+- `./workspace-reload-controller` 导出：`WorkspaceReloadController`（单个顶层 config 文件的 watcher + debounce + 串行 reload 控制器）与 `WorkspaceReloadStatus`/`WorkspaceReloadSnapshot`/`WorkspaceWatcher`/`WorkspaceTimer` 等类型；框架无关（不知道 Cordis/Agent/MCP/preset 语义），reload 回调与 watch factory/timer 可注入，供 fake-watcher 确定性测试使用；默认 factory 是 chokidar v4。
 
 ## 挂载语义（`./workspace-tree`）
 
 - `WorkspaceTree extends Include`：配置文件固定为 `<canonical>/.dsh/cordis.yml`；`write()` 为 no-op（workspace config 是输入，Loader teardown 永不写回）。
 - specifier 解析与官方 `PresetTree` 一致：`./`／`../` 按 `.dsh` 目录解析；绝对路径转 file URL；裸包名通过挂载前捕获的 Host base + `ctx.loader.internal.import` 从 Host 依赖树解析（不读 workspace 任意 `node_modules`）。
 - `mountWorkspaceTree(scopeCtx, workspace)`：`await handle.await()` 后复用 `@deepseek-ai/dsh-agent-presets` 导出的 `inactiveRows`／`leakedServices` 做挂载审计——拒绝未激活／缺 inject 的 row，拒绝把 service 发布进 root realm 的 row（isolate realm 内的发布是合法的）。失败时 dispose 子树并抛 `WorkspaceMountError`（携带 workspace 路径）。
-- 无 chokidar／live reload：本轮只做首次挂载与完整 dispose；配置热重载（watcher、quiescent generation 切换）留待后续。
+- `MountedWorkspaceTree.dispose()`：幂等、可 await 的 exact-subtree disposer——只卸载这一棵子树（live reload 用它替换整树），workspace scope 与其子资源存活；scope 的最终 dispose 仍是兜底所有者，遇到已卸载的旧子树是安全的。watcher 与热重载语义见「Workspace 热重载」一节。
+
+## Workspace 热重载（`./workspace-reload-controller`）
+
+默认（`watchWorkspaceConfig: true`）下，每个 live entry 恰好拥有一个 reload controller，监听且**只监听**顶层 `<canonical>/.dsh/cordis.yml`（`add`／`change`／`unlink`，含编辑器 atomic-save 的 rename 替换模式）：
+
+- **Watch anchor**：watcher 锚定在 canonical workspace root（acquire 时必然存在的目录）而不是 config 路径本身——chokidar v4 无法可靠报告「watch 开始后才出现的嵌套路径」，而 `.dsh/` 可能在 acquire 时尚不存在；controller 仍只接受 exact config path 的事件。`depth: 2` + `ignored` 谓词把扫描／监听范围限制在 anchor、`.dsh` 与 config 文件本身，绝不递归进项目树，也不会为了监听在用户 workspace 里创建 `.dsh`。
+- **Readiness**：registry 先 `await controller.ready`（watcher 就绪）才做首次严格 stat/mount，watcher 启动期出错会让 `acquire()` 直接失败；ready 前到达的事件只标记 dirty，`activate()` 重放为恰好一次 reconcile pass——pass 重新 stat 文件，无实际变化则跳过（同 mtime/size/inode），不做无谓的二次挂载。
+- **Reload 事务**：事件突发去抖（默认 150ms）后，同一 workspace 的 pass 严格串行（pass 运行中到达的事件 coalesce 为恰好一次后续 pass，连续编辑下持续追平）；不同 workspace 的 reload 并行。pass 先 dispose 旧 `MountedWorkspaceTree` 子树并 await quiescence，再 stat 顶层文件：缺失 → 发布空 workspace layer；存在 → 挂载＋审计新子树。整树替换意味着所有正确 effect-owned 的 workspace 贡献——tools、prompt sections、skills、commands、scoped listeners、MCP 连接及其它资源——一起卸载重挂，不会出现半新半旧。
+- **Step boundary**：live Agent 跨 reload 存活。已组装或流式中的 model request 保留冻结的 request header 与 tool schema；下一个 model step 重新执行 `systemPrompt.assemble()`，观察到当前 scoped registry。旧 schema 生成的 tool call 可能与移除竞争并返回 `UNKNOWN_TOOL`（与全局 composition HMR 的边界一致；v1 不 drain 任意 in-flight 第三方工具调用）。
+- **失败语义**：初始挂载仍然严格（`acquire()` 拒绝且不残留缓存）；live reload 可恢复——旧树已卸载、失败的新树被完整回滚、workspace scope/lease/Agent 全部存活、workspace 贡献暂时缺失（MCP 行会退出进程并解除 mask）、状态置为 `failed`，日志只含 canonical 路径与 flattened error message（绝不落 config/env/header 值），下一个文件事件自动重试。
+- **MCP 交互**：workspace MCP 行随 reload 整行替换——旧进程退出、新进程以 workspace 自己的 cwd/env 启动、对 global 同名 namespace 的 mask 在串行 commit 链上重建（替换 restriction 先安装、旧 mask 后移除，无完全解除遮蔽的窗口）；broken MCP startup 使 reload 失败但不杀 Agent/workspace，修复文件后重试成功。
+- **Final lease**：最后一个租约释放时先标记 disposed 并从查找表移除，然后 stop controller——拒绝新事件 → 取消 pending debounce → close watcher → drain 运行中的 pass（允许跑完但不启动后续 pass）——再 `scope.dispose()`；不留 watcher、timer、composition、工具、mask 或子进程。registry fiber unload（provider HMR／Host teardown）对全部 live entry 走同一路径。
+- **trust=false / watch=false**：`trustWorkspaceConfig: false` 时不 parse/import/mount/watch，仍是空 scoped layer；`watchWorkspaceConfig: false` 只做首次挂载，之后文件变化不产生任何反应。
+
+### 明确不 watch / 不做的（限制）
+
+- 不 watch preset `agent.cordis.yml`，也不在 preset 换代时自动 rebind live Agent；
+- 不 watch 被 composition import 的 JS/package 模块，不 watch nested include 的 YAML，不跟踪任何依赖关系——编辑依赖文件后 touch 或重新保存顶层 `cordis.yml` 即可触发一次完整 remount（顶层文件才是 reload 单位）；
+- 不 drain 任意 in-flight 的第三方工具调用；
+- 不做 blue-green：不并行生成候选树，失败后不保留上一好树（与 DSH 全局 patch HMR 的运行模型一致）；
+- 不支持 structural `workspace-agent-integration`／`workspace-mcp-manager` provider 自身的 live HMR（与 decorator 同级，开发时需先 dispose 全部 live Agent 或重启 Host）。
+
+详细设计、readiness 细节与完整测试矩阵见 [docs/workspace-hot-reload-plan.md](docs/workspace-hot-reload-plan.md)。
 
 ## 安装（bundle）
 
@@ -28,7 +52,7 @@ DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis sc
 dsh plugin --profile web add /path/to/dsh-workspace-overlay
 ```
 
-包内 `dsh.bundle.patch`（`cordis.patch.yml`）插入三行：`workspace-registry`（`workspaceCordis` provider）、`workspace-mcp-manager`（`workspaceMcp` provider）与 `workspace-agent-integration`（`dsh-workspace-overlay/integration-plugin`，AgentRegistry + agentPresets decorator 接线，见下文）。manager 行不配置任何默认 MCP server：global MCP 行由 profile patch 按需添加（见「MCP manager」示例），workspace MCP 行写在各 workspace 的 `.dsh/cordis.yml` 里。
+包内 `dsh.bundle.patch`（`cordis.patch.yml`）插入三行：`workspace-registry`（`workspaceCordis` provider）、`workspace-mcp-manager`（`workspaceMcp` provider）与 `workspace-agent-integration`（`dsh-workspace-overlay/integration-plugin`，AgentRegistry + agentPresets decorator 接线，见下文）。`workspace-registry` 行的 patch config 显式写出 `trustWorkspaceConfig: true`／`watchWorkspaceConfig: true`／`reloadDebounceMs: 150`——patch 覆盖行会整行替换 config，显式写出部署值（与 schema 默认一致）让 `dsh --dump-config` 直接可见。manager 行不配置任何默认 MCP server：global MCP 行由 profile patch 按需添加（见「MCP manager」示例），workspace MCP 行写在各 workspace 的 `.dsh/cordis.yml` 里。
 
 ## MCP core（`./mcp` 子路径）
 
@@ -73,6 +97,7 @@ Manager从每个连接（global与workspace都接）的generation通知维护全
 
 - Manager 不自己持有 workspace lease；行 fiber 由 workspace scope 通过 composition 持有。最后 Agent lease release → workspace scope dispose → 行 fiber effect 依次：`await connection.dispose()`（关进程、注销工具）→ 移除 override/mask/reservation。
 - **Workspace 行必须 `failOnStartupError: true`**，否则该行在 load 时明确失败；初始连接/同步失败使整个 workspace composition mount 拒绝，`acquire()` 抛错——任何 Agent 都不会在坏 server 上发布。失败后 reservation/mask/进程全部回滚，修复 `.dsh/cordis.yml` 后重试即可。
+- **Live reload**：workspace 行随顶层 config 整树热重载——旧行 fiber 的 effect 依次 `await connection.dispose()`（关进程、注销工具）后移除 override/mask/reservation，新行以当前文件内容重新挂载并重建 mask；reload 期的失败/恢复语义见「Workspace 热重载」。
 - 同 scope（global 或同一 workspace）重复 `serverName` 在 load 时失败；跨 workspace 同名允许。每 (scope, serverName) 一个 reservation。
 
 ### cwd 与安全
@@ -136,6 +161,8 @@ pnpm build
 ```
 
 `dist/` 由 `tsc` 构建；built-entry smoke test 在目标安装版 DSH 的 profile 依赖树中解析包名后验证。测试通过真实 Loader composition 引导：相对 specifier、裸 specifier（vitest 无 Node internal loader，测试以 stub resolver 记录路由并加载真实 fixture 包）、挂载审计、trust、single-flight、失败重试与 dispose 均有覆盖（`tests/fixtures/plugins/` 下的 fixture 插件经 Node internal loader 导入，测试通过 `globalThis` 观察其状态）。MCP 内核测试（`tests/mcp/`）覆盖：命名已知答案（对照安装版 rc.6 bundle 推导）、重复/非法 schema、分页、`list_changed` 好代替换与失败保留旧代、stdio env scrub/cwd（canary secret 不得泄露）、startup failure true/false、reconnect/give-up、call timeout/cancel、dispose 关闭子进程且工具注销，以及 streamable-http 端到端（header 服务端断言）；fixture server（`tests/fixtures/mcp/fixture-server.ts`）在每个测试进程生命周期内 spawn 并 dispose，不做长驻后台 job。MCP manager 测试覆盖：mock-SDK 状态机（`manager.spec.ts`——reservation 同 scope 重复/跨 workspace 允许、workspace 行强制 `failOnStartupError`、cwd 解析、mask 真实 ScopedLayers 语义（global a t1..t5 + ws a t1..t3 + global b → ws 视图仅 a t1..t3 且 b 保留）、global 换代重建/清空释放、own 列表变化重建、startup 回滚与 teardown）与真实 composition + fixture 进程（`manager-integration.spec.ts`——global a + ws1/ws2 override + ws3 继承 = 3 进程、同 workspace 两租约一进程、`cwd:''`/`${workspaceRoot}` 端到端、坏 server 阻止 acquire 且修复可重试、日志无 canary secret）。
+
+Workspace 热重载另有四组覆盖：确定性的 fake-watcher Registry 集成（`workspace-registry-reload.spec.ts`——严格初始挂载与 watcher ready 门禁、valid→valid/invalid/absent 各方向、invalid 后 scope/lease 存活且下个事件恢复、同 workspace 多租约共享一个 watcher、final release 收敛、trust/watch=false）；真实 chokidar + 临时目录（`workspace-live-reload.spec.ts`——change／atomic rename／unlink→add、`.dsh` 后出现才创建 config、双 workspace 独立 reload、release 后写文件不再反应、不在用户 workspace 里创建 `.dsh`）；live 能力视图（`workspace-tools-live.spec.ts`——不替换 workspace/Agent key 的前提下，下一次 `tools.schemas()` 视图看到新工具表面，invalid 时工具面暂时清空、修复后恢复）；MCP live reload（`tests/mcp/manager-live-reload.spec.ts`——reload 替换 workspace MCP 进程与工具且 global mask 保持正确、坏 server 使 reload 失败但 scope/lease 活、修复后恢复、final release 无进程/工具/mask 残留）。
 
 ## Agent 集成（bundle 已启用）
 
