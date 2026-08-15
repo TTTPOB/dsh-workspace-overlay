@@ -119,11 +119,14 @@ Add a focused internal controller, owned by one `WorkspaceEntry`.
 Responsibilities:
 
 - create and close the chokidar watcher;
+- watch the exact config path, optionally anchored on a stable directory (`watchAnchor`) that always exists — chokidar v4 cannot reliably report the later creation of a nested path whose parent directory did not exist when watching started, so the registry anchors on the canonical workspace root and the controller still accepts only exact config path events;
+- bound the watch scope with chokidar `depth` and an `ignored` predicate that keeps only the anchor, `.dsh`, and the exact config file, so watching never recurses into the rest of the project tree;
 - accept only add/change/unlink events for the exact config path;
 - debounce event bursts;
 - serialize reload passes;
 - coalesce events that arrive while reloading;
-- stop, cancel, and quiesce idempotently;
+- expose a readiness gate: `ready` resolves when the watcher reports `ready` and rejects when the watcher errors during startup, and `activate()` starts event-driven work only after the owner's strict initial read — events before activation only mark the controller dirty and are replayed as exactly one pass (the registry's pass re-stats the file and skips a mount when nothing observably changed, closing the gap between the initial strict read and the watcher without a pointless double mount);
+- stop, cancel, and quiesce idempotently, including before `ready` settles;
 - contain callback rejections so chokidar never creates an unhandled rejection;
 - report lifecycle events through callbacks without owning Registry maps.
 
@@ -158,10 +161,14 @@ Extend `WorkspaceInfo` with a read-only reload snapshot when watching is enabled
 ```ts
 interface WorkspaceReloadInfo {
   watching: boolean
-  status: 'idle' | 'scheduled' | 'reloading' | 'failed' | 'stopped'
+  status: 'starting' | 'idle' | 'scheduled' | 'reloading' | 'failed' | 'stopped'
   successfulReloads: number
 }
 ```
+
+`starting` covers the window from watcher creation until the owner's strict
+initial read is committed and `activate()` is called; events in that window
+are covered by the initial read or replayed as one reconcile pass.
 
 Do not expose raw error objects or config text through this debug API. Log diagnostics with canonical workspace identity and flattened error messages already produced by `WorkspaceMountError`; MCP/env/header values must not be logged.
 

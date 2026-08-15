@@ -16,13 +16,23 @@
  *
  * When watching is enabled (trusted and `watchWorkspaceConfig`), every live
  * entry owns exactly one `WorkspaceReloadController` over its exact top-level
- * config path. A file event debounces into a serialized reload pass that
- * disposes the current composition subtree, re-stats the file, and mounts a
- * fresh subtree — or publishes an empty workspace layer when the file is
- * gone. A failed live reload leaves the scope and leases alive and retries on
- * the next event; only the initial mount is strict. The final lease release
- * stops the controller (cancelling the debounce, closing the watcher, and
- * draining a running pass) before the scope goes down.
+ * config path. The controller's watcher is anchored on the canonical
+ * workspace root — an existing directory, so a config file that appears later
+ * (even when `.dsh/` did not exist at acquire time) is observed — and the
+ * registry awaits the watcher's `ready` BEFORE its strict initial stat and
+ * mount, closing the gap between the initial read and the watcher: a change
+ * that lands before the strict read is simply part of it, and one that lands
+ * while it runs is replayed by the controller's activation as exactly one
+ * reconcile pass, which re-stats the file and skips the mount when nothing
+ * observably changed. A watcher that fails to become ready rejects the
+ * initial acquire and leaves nothing cached. A file event afterwards
+ * debounces into a serialized reload pass that disposes the current
+ * composition subtree, re-stats the file, and mounts a fresh subtree — or
+ * publishes an empty workspace layer when the file is gone. A failed live
+ * reload leaves the scope and leases alive and retries on the next event;
+ * only the initial mount is strict. The final lease release stops the
+ * controller (cancelling the debounce, closing the watcher, and draining a
+ * running pass) before the scope goes down.
  *
  * @module dsh-workspace-overlay
  */
@@ -158,6 +168,14 @@ interface WorkspaceEntry {
    */
   composition?: MountedWorkspaceTree
   /**
+   * The stat of the config file the currently mounted composition was built
+   * from (mtime/size/inode), when a composition is mounted. A reload pass
+   * compares the current stat against it to recognize events that predate the
+   * mount or were no-ops, so a reconcile pass never forces a pointless second
+   * dispose+mount (and MCP restart) for a file that did not observably change.
+   */
+  mountedStat?: { mtimeMs: number; size: number; ino?: number }
+  /**
    * The entry's reload controller, when trusted and watching is enabled. Owns
    * the watcher, the debounce timer, and the serialized reload passes; the
    * final release stops it before the scope goes down.
@@ -210,15 +228,30 @@ function isEnoent(err: unknown): boolean {
   return (err as NodeJS.ErrnoException)?.code === 'ENOENT'
 }
 
-/** Whether `path` exists; ENOENT is the only tolerated failure. */
-async function exists(path: string): Promise<boolean> {
+/** The stat of `path`, or undefined when it does not exist. */
+async function statOrUndefined(path: string): Promise<{ mtimeMs: number; size: number; ino?: number } | undefined> {
   try {
-    await stat(path)
-    return true
+    const info = await stat(path)
+    return { mtimeMs: info.mtimeMs, size: info.size, ino: info.ino }
   } catch (err) {
-    if (isEnoent(err)) return false
+    if (isEnoent(err)) return undefined
     throw err
   }
+}
+
+/**
+ * Whether two stats describe the same file content for reload purposes:
+ * same mtime, same size, and the same inode. An editor's atomic
+ * rename-replace mints a new inode (and a rewrite changes the mtime), so a
+ * genuinely saved file never compares equal; only events that predate the
+ * current mount or did not touch the file (a no-op touch with preserved
+ * times) compare equal.
+ */
+function sameFileStat(
+  left: { mtimeMs: number; size: number; ino?: number },
+  right: { mtimeMs: number; size: number; ino?: number },
+): boolean {
+  return left.mtimeMs === right.mtimeMs && left.size === right.size && left.ino === right.ino
 }
 
 class LeaseImpl implements WorkspaceLease {
@@ -376,33 +409,31 @@ export default class WorkspaceRegistry extends Service {
     const key: ScopeKey = {}
     this.scopeRoots.set(key, canonical)
     const scope = createScope(this.selfCtx, key)
+    const trust = this.config.trustWorkspaceConfig
+    const entry: WorkspaceEntry = {
+      canonical,
+      key,
+      scope,
+      leases: 0,
+      disposed: false,
+      trustWorkspaceConfig: trust,
+      configured: false,
+      composition: undefined,
+      mountedStat: undefined,
+      controller: undefined,
+    }
     let controller: WorkspaceReloadController | undefined
     try {
-      const trust = this.config.trustWorkspaceConfig
-      // Existence is a stat; the file is only read/parsed/imported when trust
-      // is enabled, so an untrusted workspace still gets its empty scope.
-      const configured = await exists(workspaceConfigPath(canonical))
-      const composition = configured && trust
-        ? await mountWorkspaceTree(scope.ctx, canonical)
-        : undefined
-      const entry: WorkspaceEntry = {
-        canonical,
-        key,
-        scope,
-        leases: 0,
-        disposed: false,
-        trustWorkspaceConfig: trust,
-        configured,
-        composition,
-        controller: undefined,
-      }
       if (trust && this.config.watchWorkspaceConfig) {
         // Exactly one controller per trusted, watched entry — whether or not
-        // the config file exists right now. Created only after the initial
-        // mount settled, so no reload pass can race the entry's first mount;
-        // events lost in that gap are recovered by the next file event.
+        // the config file exists right now. The watcher is anchored on the
+        // canonical workspace root (an existing directory), not on the exact
+        // config path: chokidar v4 cannot reliably report a nested path that
+        // appears after watching started, and `.dsh/` itself may not exist
+        // yet. The controller still accepts only exact config path events.
         controller = new WorkspaceReloadController({
           path: workspaceConfigPath(canonical),
+          watchAnchor: canonical,
           debounceMs: this.config.reloadDebounceMs,
           reload: () => this.reloadEntry(entry),
           diagnostics: {
@@ -413,7 +444,32 @@ export default class WorkspaceRegistry extends Service {
           timer: this.runtime.timer,
         })
         entry.controller = controller
+        // Strict readiness gate: the initial stat/mount below runs only after
+        // the watcher is ready, so a change made between that read and the
+        // watcher can never be lost — anything before the read is part of the
+        // mount, and anything during it is replayed as a reconcile pass. A
+        // watcher that errors during startup rejects the acquire; nothing is
+        // published and nothing leaks.
+        await controller.ready
       }
+      // Existence is a stat; the file is only read/parsed/imported when trust
+      // is enabled, so an untrusted workspace still gets its empty scope.
+      const configPath = workspaceConfigPath(canonical)
+      const configStat = await statOrUndefined(configPath)
+      const configured = configStat !== undefined
+      const composition = configured && trust
+        ? await mountWorkspaceTree(scope.ctx, canonical)
+        : undefined
+      entry.configured = configured
+      entry.composition = composition
+      // The stat this mount was decided on; a later reconcile pass compares
+      // against it to skip no-op passes instead of double-mounting.
+      if (composition !== undefined) entry.mountedStat = configStat
+      // The strict mount is committed; event-driven reloads may begin. Events
+      // that arrived before or during the mount were only dirtied, and
+      // activation replays them as exactly one pass, which re-stats the file
+      // and skips when nothing observably changed.
+      controller?.activate()
       return entry
     } catch (error) {
       // The rejected entry is never cached. Dispose whatever the entry
@@ -436,9 +492,10 @@ export default class WorkspaceRegistry extends Service {
   }
 
   /**
-   * One reload pass for a live entry: dispose the current composition
-   * subtree, re-stat the top-level config, and mount a fresh tree when the
-   * file exists — or publish an empty workspace layer when it is gone.
+   * One reload pass for a live entry: re-stat the top-level config, dispose
+   * the current composition subtree when the file observably changed, and
+   * mount a fresh tree — or publish an empty workspace layer when the file is
+   * gone.
    *
    * The pass is serialized by the entry's controller and never outlives the
    * entry: the final release stops accepting events, cancels the debounce,
@@ -447,26 +504,57 @@ export default class WorkspaceRegistry extends Service {
    * that lands mid-pass never publishes a composition into a dead entry — a
    * mount that completed after disposal is unwound immediately instead.
    *
+   * The pass is also the reconcile seam for the watcher readiness gap: the
+   * initial strict mount happens after the watcher's `ready`, and events that
+   * arrived before or during it are replayed as one pass here. Because the
+   * file is re-statted first and compared against the stat the current
+   * composition was built from, such a pass recognizes that the file did not
+   * observably change and keeps the live tree — no pointless second
+   * dispose+mount (and no pointless MCP restart) for an event that predates
+   * the mount.
+   *
    * A failed mount/audit leaves the composition field empty and rejects, so
    * the controller records the failure and the next file event retries; the
    * scope, leases, and Agents all stay live.
    */
   private async reloadEntry(entry: WorkspaceEntry): Promise<void> {
     if (entry.disposed) return
+    const path = workspaceConfigPath(entry.canonical)
+    const configStat = await statOrUndefined(path)
+    if (entry.disposed) return
+    if (configStat === undefined) {
+      // The file is gone: publish the empty workspace layer. The old subtree
+      // goes down first and is fully quiescent before anything new mounts;
+      // the field is cleared before the awaited disposal so no observer can
+      // see a dead composition as live.
+      const current = entry.composition
+      entry.composition = undefined
+      entry.mountedStat = undefined
+      entry.configured = false
+      if (current !== undefined) await current.dispose()
+      return
+    }
+    if (
+      entry.composition !== undefined
+      && entry.mountedStat !== undefined
+      && sameFileStat(configStat, entry.mountedStat)
+    ) {
+      // The event(s) that led here predate the current mount or were no-ops:
+      // the file is indistinguishable from what the live composition was
+      // built from (same mtime, size, and inode), so disposing and remounting
+      // would only restart the workspace capabilities for nothing.
+      entry.configured = true
+      return
+    }
     // The old subtree goes down first and is fully quiescent before anything
     // new mounts; the field is cleared before the awaited disposal so no
     // observer can see a dead composition as live.
     const current = entry.composition
     entry.composition = undefined
+    entry.mountedStat = undefined
+    entry.configured = true
     if (current !== undefined) await current.dispose()
     if (entry.disposed) return
-    const present = await exists(workspaceConfigPath(entry.canonical))
-    if (entry.disposed) return
-    if (!present) {
-      entry.configured = false
-      return
-    }
-    entry.configured = true
     const mounted = await mountWorkspaceTree(entry.scope.ctx, entry.canonical)
     if (entry.disposed) {
       // The final release landed while the subtree mounted: unwind the fresh
@@ -475,6 +563,8 @@ export default class WorkspaceRegistry extends Service {
       return
     }
     entry.composition = mounted
+    // The stat this mount was decided on; the next pass compares against it.
+    entry.mountedStat = configStat
   }
 
   /**

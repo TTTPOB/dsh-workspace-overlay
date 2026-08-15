@@ -6,11 +6,15 @@
  * plugin, so the harness constructs the registry directly on a dedicated
  * fiber when runtime seams are supplied. Tests drive file changes by writing
  * to disk (real stat/parse/import/mount) and emit watcher events by hand; no
- * real chokidar watcher is involved, which is Block C's concern.
+ * real chokidar watcher is involved, which Block C's real-filesystem specs
+ * cover. The fake emits `ready` on a microtask after creation, so the
+ * registry's strict readiness gate (`await controller.ready` before the
+ * initial stat/mount) resolves like chokidar's async ready would.
  */
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import WorkspaceRegistry, {
   defaultConfig,
   type WorkspaceRegistryConfig,
@@ -19,6 +23,7 @@ import { WorkspaceMountError } from '../src/workspace-tree.js'
 import type {
   WorkspaceTimer,
   WorkspaceWatcher,
+  WorkspaceWatchOptions,
 } from '../src/workspace-reload-controller.js'
 import {
   fixtureState,
@@ -37,14 +42,20 @@ type WatchEvent = 'add' | 'change' | 'unlink'
 /** A watcher that never touches the filesystem; events are emitted by hand. */
 class FakeWatcher implements WorkspaceWatcher {
   private readonly pathListeners = new Map<WatchEvent, Set<(path: string) => void>>()
+  private readonly readyListeners = new Set<() => void>()
   private readonly errorListeners = new Set<(error: unknown) => void>()
   closeCalls = 0
 
   on(event: WatchEvent, listener: (path: string) => void): unknown
+  on(event: 'ready', listener: () => void): unknown
   on(event: 'error', listener: (error: unknown) => void): unknown
-  on(event: WatchEvent | 'error', listener: ((path: string) => void) | ((error: unknown) => void)): unknown {
+  on(event: WatchEvent | 'ready' | 'error', listener: ((path: string) => void) | (() => void) | ((error: unknown) => void)): unknown {
     if (event === 'error') {
       this.errorListeners.add(listener as (error: unknown) => void)
+      return this
+    }
+    if (event === 'ready') {
+      this.readyListeners.add(listener as () => void)
       return this
     }
     let set = this.pathListeners.get(event)
@@ -60,6 +71,10 @@ class FakeWatcher implements WorkspaceWatcher {
     for (const listener of this.pathListeners.get(event) ?? []) listener(path)
   }
 
+  emitReady(): void {
+    for (const listener of this.readyListeners) listener()
+  }
+
   emitError(error: unknown): void {
     for (const listener of this.errorListeners) listener(error)
   }
@@ -72,13 +87,24 @@ class FakeWatcher implements WorkspaceWatcher {
 
 /** Records creation arguments and hands out fake watchers. */
 class FakeWatchFactory {
-  readonly calls: Array<{ path: string; options: { ignoreInitial: boolean } }> = []
+  readonly calls: Array<{ path: string; options: WorkspaceWatchOptions }> = []
   readonly watchers: FakeWatcher[] = []
+  /** Emit a watcher error instead of ready on creation (startup failure). */
+  failReadyWith: Error | undefined
+  /** Do not auto-emit ready; the test drives readiness by hand. */
+  suppressReady = false
 
-  create = (path: string, options: { ignoreInitial: boolean }): FakeWatcher => {
+  create = (path: string, options: WorkspaceWatchOptions): FakeWatcher => {
     this.calls.push({ path, options })
     const watcher = new FakeWatcher()
     this.watchers.push(watcher)
+    if (!this.suppressReady) {
+      // Ready arrives asynchronously, after the controller subscribed.
+      queueMicrotask(() => {
+        if (this.failReadyWith !== undefined) watcher.emitError(this.failReadyWith)
+        else watcher.emitReady()
+      })
+    }
     return watcher
   }
 
@@ -152,13 +178,76 @@ describe('WorkspaceRegistry live reload', () => {
     expect(fixtureState().markers).toEqual(['initial'])
     expect(lease.configured).toBe(true)
     expect(lease.composition?.active).toBe(true)
-    // Exactly one controller, watching the exact config path.
-    expect(factory.calls).toEqual([{ path: configPath, options: { ignoreInitial: true } }])
+    // Exactly one controller, anchored on the stable workspace root (not the
+    // exact config path — a not-yet-existing `.dsh/` must still be
+    // discovered), with bounded watch options.
+    expect(factory.calls).toHaveLength(1)
+    expect(factory.calls[0]!.path).toBe(ws)
+    expect(factory.calls[0]!.options).toMatchObject({
+      ignoreInitial: true,
+      depth: 2,
+      atomic: true,
+    })
+    const ignored = factory.calls[0]!.options.ignored
+    // The anchor itself, .dsh, and the config are kept; the rest is excluded.
+    expect(ignored(ws)).toBe(false)
+    expect(ignored(join(ws, 'package.json'))).toBe(true)
+    expect(ignored(configPath)).toBe(false) // the exact config is kept
     expect(host.registry.get(lease.canonical)?.reload).toEqual({
       watching: true,
       status: 'idle',
       successfulReloads: 0,
     })
+  })
+
+  it('rejects acquire when the watcher fails to become ready and leaves nothing', async () => {
+    const ws = await makeWorkspace(host.root, 'readyfail')
+    await seedPlugins(ws, ['contribute.js'])
+    await writeConfig(ws, markerRow('never'))
+    const boom = new Error('watcher startup failed')
+    factory.failReadyWith = boom
+
+    // The strict readiness gate rejects the initial acquire...
+    await expect(host.registry.acquire(ws)).rejects.toBe(boom)
+    // ...and the cleanup stopped the watcher, cancelled nothing (no timer was
+    // ever armed), and cached nothing.
+    expect(factory.watchers).toHaveLength(1)
+    expect(factory.watcher.closeCalls).toBe(1)
+    expect(timer.pendingCount).toBe(0)
+    expect(host.registry.size).toBe(0)
+    expect(fixtureState().markers).toEqual([])
+
+    // A healthy retry works afterwards (fresh scope and watcher).
+    factory.failReadyWith = undefined
+    const lease = await host.registry.acquire(ws)
+    expect(fixtureState().markers).toEqual(['never'])
+    expect(host.registry.get(lease.canonical)?.reload?.status).toBe('idle')
+  })
+
+  it('reconciles pre-activation events without double-mounting an unchanged file', async () => {
+    const ws = await makeWorkspace(host.root, 'reconcile')
+    await seedPlugins(ws, ['contribute.js'])
+    const configPath = await writeConfig(ws, markerRow('v1'))
+    // Hold the watcher in `starting` so an event can arrive before the
+    // registry's strict initial stat/mount.
+    factory.suppressReady = true
+    const acquiring = host.registry.acquire(ws)
+    await vi.waitFor(() => {
+      expect(factory.watchers).toHaveLength(1)
+    })
+    factory.watcher.emit('change', configPath)
+    factory.watcher.emitReady()
+
+    const lease = await acquiring
+    // The strict mount already read the current file; the replayed event
+    // becomes exactly one reconcile pass that recognizes the file is
+    // unchanged and keeps the live tree — no second dispose+mount.
+    timer.fire()
+    await settled(lease.canonical, 'idle')
+    expect(fixtureState().markers).toEqual(['v1'])
+    expect(fixtureState().disposed).toBe(0)
+    expect(host.registry.get(lease.canonical)?.reload?.successfulReloads).toBe(1)
+    expect(host.registry.get(lease.canonical)?.composition?.active).toBe(true)
   })
 
   it('rejects an invalid initial config without leaking a watcher or a timer', async () => {
@@ -168,9 +257,11 @@ describe('WorkspaceRegistry live reload', () => {
 
     await expect(host.registry.acquire(ws)).rejects.toBeInstanceOf(WorkspaceMountError)
     expect(host.registry.size).toBe(0)
-    // The strict initial mount failed before any controller was created.
-    expect(factory.calls).toHaveLength(0)
-    expect(factory.watchers).toHaveLength(0)
+    // The watcher was opened (and became ready) before the strict mount
+    // rejected; the cleanup stopped it and armed no timer.
+    expect(factory.calls).toHaveLength(1)
+    expect(factory.watchers).toHaveLength(1)
+    expect(factory.watcher.closeCalls).toBe(1)
     expect(timer.pendingCount).toBe(0)
   })
 
@@ -276,8 +367,10 @@ describe('WorkspaceRegistry live reload', () => {
     const lease = await host.registry.acquire(ws)
     expect(lease.configured).toBe(false)
     expect(lease.composition).toBeUndefined()
-    // Even without a config file the trusted, watched entry owns a controller.
+    // Even without a config file the trusted, watched entry owns a controller
+    // anchored on the workspace root.
     expect(factory.calls).toHaveLength(1)
+    expect(factory.calls[0]!.path).toBe(ws)
 
     await seedPlugins(ws, ['contribute.js'])
     const configPath = await writeConfig(ws, markerRow('appeared'))
