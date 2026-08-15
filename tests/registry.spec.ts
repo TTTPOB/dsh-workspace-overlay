@@ -192,7 +192,12 @@ describe('WorkspaceRegistry', () => {
 
     const other = new Context()
     await other.plugin(Loader)
-    const otherFiber = await other.plugin(WorkspaceRegistry, { trustWorkspaceConfig: false })
+    // The remaining fields are filled by the schema, exactly as a patch row
+    // would rely on the defaults.
+    const otherFiber = await other.plugin(
+      WorkspaceRegistry,
+      { trustWorkspaceConfig: false } as Parameters<typeof other.plugin>[1],
+    )
     const otherLease = await other.workspaceCordis.acquire(dir)
     expect(otherLease.trustWorkspaceConfig).toBe(false)
     await otherFiber.dispose()

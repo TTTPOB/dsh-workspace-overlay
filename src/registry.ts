@@ -14,9 +14,20 @@
  * workspaces are never read, parsed, or imported — they still get an empty
  * scope so their consumers inherit the host composition unchanged.
  *
+ * When watching is enabled (trusted and `watchWorkspaceConfig`), every live
+ * entry owns exactly one `WorkspaceReloadController` over its exact top-level
+ * config path. A file event debounces into a serialized reload pass that
+ * disposes the current composition subtree, re-stats the file, and mounts a
+ * fresh subtree — or publishes an empty workspace layer when the file is
+ * gone. A failed live reload leaves the scope and leases alive and retries on
+ * the next event; only the initial mount is strict. The final lease release
+ * stops the controller (cancelling the debounce, closing the watcher, and
+ * draining a running pass) before the scope goes down.
+ *
  * @module dsh-workspace-overlay
  */
 import { Service, type Context } from '@deepseek-ai/cordis'
+import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { createScope, type Scope, type ScopeKey } from '@deepseek-ai/dsh-scope'
 import z from '@deepseek-ai/schemastery'
 import { realpath, stat } from 'node:fs/promises'
@@ -26,6 +37,12 @@ import {
   workspaceConfigPath,
   type MountedWorkspaceTree,
 } from './workspace-tree.js'
+import {
+  WorkspaceReloadController,
+  type WorkspaceReloadSnapshot,
+  type WorkspaceTimer,
+  type WorkspaceWatchFactory,
+} from './workspace-reload-controller.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -37,10 +54,22 @@ declare module '@deepseek-ai/cordis' {
 export interface WorkspaceRegistryConfig {
   /** Whether `<workspace>/.dsh/cordis.yml` is honored by workspace consumers. */
   trustWorkspaceConfig: boolean
+  /**
+   * Whether live file events on `<workspace>/.dsh/cordis.yml` reload the
+   * composition. No effect when trust is disabled.
+   */
+  watchWorkspaceConfig: boolean
+  /**
+   * Debounce window in milliseconds for config file event bursts; a
+   * non-negative finite integer no greater than `MAX_TIMER_DELAY_MS`.
+   */
+  reloadDebounceMs: number
 }
 
 export const defaultConfig: WorkspaceRegistryConfig = {
   trustWorkspaceConfig: true,
+  watchWorkspaceConfig: true,
+  reloadDebounceMs: 150,
 }
 
 /** The path does not exist. */
@@ -67,6 +96,9 @@ export interface WorkspaceCompositionInfo {
   readonly active: boolean
 }
 
+/** Read-only live snapshot of one entry's reload controller. */
+export type WorkspaceReloadInfo = WorkspaceReloadSnapshot
+
 /** Read-only debug snapshot of one live workspace entry. */
 export interface WorkspaceInfo {
   /** Canonical (realpath) workspace path. */
@@ -76,10 +108,12 @@ export interface WorkspaceInfo {
   /** True once the final release ran. */
   disposed: boolean
   trustWorkspaceConfig: boolean
-  /** True when `<root>/.dsh/cordis.yml` existed when the entry was created. */
+  /** True when `<root>/.dsh/cordis.yml` currently exists (live state). */
   configured: boolean
   /** The mounted composition, when trust enabled and a config file exists. */
   composition?: WorkspaceCompositionInfo
+  /** Live reload controller snapshot, when watching is enabled. */
+  reload?: WorkspaceReloadInfo
 }
 
 /**
@@ -94,7 +128,11 @@ export interface WorkspaceLease {
   /** Canonical (realpath) workspace path. */
   readonly canonical: string
   readonly trustWorkspaceConfig: boolean
-  /** True when `<root>/.dsh/cordis.yml` existed when the entry was created. */
+  /**
+   * True when `<root>/.dsh/cordis.yml` existed when this lease was created.
+   * A creation-time snapshot: the live state is read through
+   * `workspaceCordis.get(canonical)`.
+   */
   readonly configured: boolean
   /** The mounted composition, when trust enabled and a config file exists. */
   readonly composition?: WorkspaceCompositionInfo
@@ -110,13 +148,36 @@ interface WorkspaceEntry {
   leases: number
   disposed: boolean
   trustWorkspaceConfig: boolean
+  /** Live state: true while `<root>/.dsh/cordis.yml` exists. */
   configured: boolean
   /**
-   * Present when a trusted config file was mounted. The subtree is owned by
-   * the scope: the final release's `scope.dispose()` unwinds it, so no
-   * separate composition disposer is needed (kept for status/diagnostics).
+   * The currently mounted composition subtree. Live: a reload pass disposes
+   * the old subtree, clears the field, and publishes the fresh one only when
+   * the entry is still live. Owned by the scope as a fallback — the final
+   * release's `scope.dispose()` unwinds whatever subtree is still mounted.
    */
   composition?: MountedWorkspaceTree
+  /**
+   * The entry's reload controller, when trusted and watching is enabled. Owns
+   * the watcher, the debounce timer, and the serialized reload passes; the
+   * final release stops it before the scope goes down.
+   */
+  controller?: WorkspaceReloadController
+}
+
+/**
+ * Constructor-only seams for deterministic tests.
+ *
+ * The plugin loader cannot pass constructor arguments to a class plugin, so a
+ * production registration always gets the real chokidar factory and global
+ * timers; tests that need deterministic watcher/timer control construct the
+ * registry directly (or through a wrapper plugin) with these options.
+ */
+export interface WorkspaceRegistryRuntime {
+  /** Injectable watcher factory for every entry's reload controller. */
+  watchFactory?: WorkspaceWatchFactory
+  /** Injectable timer for every entry's reload controller. */
+  timer?: WorkspaceTimer
 }
 
 /** Rejects `cwd` unless it is an absolute path to an existing directory. */
@@ -176,6 +237,8 @@ class LeaseImpl implements WorkspaceLease {
     this.ctx = entry.scope.ctx
     this.canonical = entry.canonical
     this.trustWorkspaceConfig = entry.trustWorkspaceConfig
+    // Snapshot at lease creation; `entry.configured` mutates with live
+    // reloads and is only readable through `get(canonical)`.
     this.configured = entry.configured
   }
 
@@ -196,6 +259,8 @@ class LeaseImpl implements WorkspaceLease {
 export default class WorkspaceRegistry extends Service {
   static Config = z.object({
     trustWorkspaceConfig: z.boolean().default(true),
+    watchWorkspaceConfig: z.boolean().default(true),
+    reloadDebounceMs: z.natural().max(MAX_TIMER_DELAY_MS).default(defaultConfig.reloadDebounceMs),
   }) as z<WorkspaceRegistryConfig>
 
   /** The loader supplies the host base bare specifiers resolve against. */
@@ -213,9 +278,18 @@ export default class WorkspaceRegistry extends Service {
   private readonly scopeRoots = new WeakMap<ScopeKey, string>()
   private readonly selfCtx: Context
 
-  constructor(ctx: Context, private readonly config: WorkspaceRegistryConfig = defaultConfig) {
+  constructor(
+    ctx: Context,
+    private readonly config: WorkspaceRegistryConfig = defaultConfig,
+    private readonly runtime: WorkspaceRegistryRuntime = {},
+  ) {
     super(ctx, 'workspaceCordis')
     this.selfCtx = ctx
+    // Fiber unload (provider HMR, host teardown) must not leave watchers,
+    // timers, or compositions behind: dispose every live entry exactly like
+    // the final lease release would, so a registry that is replaced or torn
+    // down while leases are still outstanding still converges.
+    ctx.effect(() => () => this.teardownAllEntries())
   }
 
   /**
@@ -243,6 +317,7 @@ export default class WorkspaceRegistry extends Service {
       leases: entry.leases,
       disposed: entry.disposed,
       trustWorkspaceConfig: entry.trustWorkspaceConfig,
+      // Live state, unlike a lease's creation-time snapshot.
       configured: entry.configured,
       ...(composition && {
         composition: {
@@ -250,6 +325,7 @@ export default class WorkspaceRegistry extends Service {
           active: composition.fiber.uid !== null,
         },
       }),
+      ...(entry.controller && { reload: entry.controller.snapshot() }),
     }
   }
 
@@ -300,42 +376,202 @@ export default class WorkspaceRegistry extends Service {
     const key: ScopeKey = {}
     this.scopeRoots.set(key, canonical)
     const scope = createScope(this.selfCtx, key)
+    let controller: WorkspaceReloadController | undefined
     try {
+      const trust = this.config.trustWorkspaceConfig
       // Existence is a stat; the file is only read/parsed/imported when trust
       // is enabled, so an untrusted workspace still gets its empty scope.
       const configured = await exists(workspaceConfigPath(canonical))
-      const composition = configured && this.config.trustWorkspaceConfig
+      const composition = configured && trust
         ? await mountWorkspaceTree(scope.ctx, canonical)
         : undefined
-      return {
+      const entry: WorkspaceEntry = {
         canonical,
         key,
         scope,
         leases: 0,
         disposed: false,
-        trustWorkspaceConfig: this.config.trustWorkspaceConfig,
+        trustWorkspaceConfig: trust,
         configured,
         composition,
+        controller: undefined,
       }
+      if (trust && this.config.watchWorkspaceConfig) {
+        // Exactly one controller per trusted, watched entry — whether or not
+        // the config file exists right now. Created only after the initial
+        // mount settled, so no reload pass can race the entry's first mount;
+        // events lost in that gap are recovered by the next file event.
+        controller = new WorkspaceReloadController({
+          path: workspaceConfigPath(canonical),
+          debounceMs: this.config.reloadDebounceMs,
+          reload: () => this.reloadEntry(entry),
+          diagnostics: {
+            onWatcherError: (error) => this.reportWatcherError(entry, error),
+            onReloadError: (error) => this.reportReloadError(entry, error),
+          },
+          watchFactory: this.runtime.watchFactory,
+          timer: this.runtime.timer,
+        })
+        entry.controller = controller
+      }
+      return entry
     } catch (error) {
-      // The subtree (if any) is owned by the scope; disposing the scope
-      // unwinds it, and a rejected entry is never cached, so the next acquire
+      // The rejected entry is never cached. Dispose whatever the entry
+      // allocated — a created controller (stop it, cancelling debounce and
+      // closing the watcher) and the scope (which unwinds any mounted
+      // subtree) — so a failed acquire leaks nothing and the next acquire
       // retries the workspace from a fresh scope.
+      if (controller !== undefined) {
+        try {
+          await controller.stop()
+        } catch {
+          // The acquire rejection below is the actionable error; a failing
+          // stop must not mask it or leave the catch path itself rejected.
+        }
+      }
       this.scopeRoots.delete(key)
       await scope.dispose()
       throw error
     }
   }
 
+  /**
+   * One reload pass for a live entry: dispose the current composition
+   * subtree, re-stat the top-level config, and mount a fresh tree when the
+   * file exists — or publish an empty workspace layer when it is gone.
+   *
+   * The pass is serialized by the entry's controller and never outlives the
+   * entry: the final release stops accepting events, cancels the debounce,
+   * and drains the running pass before the scope is disposed, and the pass
+   * itself re-checks `entry.disposed` at every await boundary, so a release
+   * that lands mid-pass never publishes a composition into a dead entry — a
+   * mount that completed after disposal is unwound immediately instead.
+   *
+   * A failed mount/audit leaves the composition field empty and rejects, so
+   * the controller records the failure and the next file event retries; the
+   * scope, leases, and Agents all stay live.
+   */
+  private async reloadEntry(entry: WorkspaceEntry): Promise<void> {
+    if (entry.disposed) return
+    // The old subtree goes down first and is fully quiescent before anything
+    // new mounts; the field is cleared before the awaited disposal so no
+    // observer can see a dead composition as live.
+    const current = entry.composition
+    entry.composition = undefined
+    if (current !== undefined) await current.dispose()
+    if (entry.disposed) return
+    const present = await exists(workspaceConfigPath(entry.canonical))
+    if (entry.disposed) return
+    if (!present) {
+      entry.configured = false
+      return
+    }
+    entry.configured = true
+    const mounted = await mountWorkspaceTree(entry.scope.ctx, entry.canonical)
+    if (entry.disposed) {
+      // The final release landed while the subtree mounted: unwind the fresh
+      // tree immediately instead of publishing it into the dying entry.
+      await mounted.dispose()
+      return
+    }
+    entry.composition = mounted
+  }
+
+  /**
+   * Stop one entry's reload controller and dispose its workspace scope. Both
+   * teardown steps always run, even when the other one fails; failures are
+   * aggregated (or rethrown singly) so the caller sees every problem.
+   */
+  private async disposeEntry(entry: WorkspaceEntry): Promise<void> {
+    const failures: unknown[] = []
+    try {
+      await entry.controller?.stop()
+    } catch (error) {
+      failures.push(error)
+    }
+    try {
+      await entry.scope.dispose()
+    } catch (error) {
+      failures.push(error)
+    }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        'workspace-cordis: failed to stop the reload controller and dispose the workspace scope',
+      )
+    }
+  }
+
+  /** Dispose every live entry on fiber unload (provider HMR, teardown). */
+  private async teardownAllEntries(): Promise<void> {
+    const failures: unknown[] = []
+    for (const entry of [...this.entries.values()]) {
+      if (entry.disposed) continue
+      // Mark first, mirroring the final release, so a reload pass racing the
+      // unload never publishes into a dying entry.
+      entry.disposed = true
+      this.entries.delete(entry.canonical)
+      this.scopeRoots.delete(entry.key)
+      try {
+        await this.disposeEntry(entry)
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        `workspace-cordis: failed to dispose ${failures.length} workspace entr(ies) on fiber teardown`,
+      )
+    }
+  }
+
+  /**
+   * The reportable text of an error for diagnostics.
+   *
+   * Aggregates are flattened one line per cause so a multi-row loader failure
+   * names every row; the fallbacks keep hostile values readable. Only error
+   * messages are used — never config text, environment values, or headers —
+   * because these lines are written to the log.
+   */
+  private static flattenError(error: unknown): string {
+    if (error instanceof AggregateError) {
+      return [error.message, ...error.errors.map(cause => `- ${WorkspaceRegistry.flattenError(cause)}`)].join('\n')
+    }
+    if (error instanceof Error) return error.message
+    return String(error)
+  }
+
+  /** Log a watcher-level error with the workspace identity, never the config. */
+  private reportWatcherError(entry: WorkspaceEntry, error: unknown): void {
+    this.selfCtx.logger.warn(
+      `workspace-cordis: watcher for workspace ${entry.canonical} (${workspaceConfigPath(entry.canonical)}) reported an error: ${WorkspaceRegistry.flattenError(error)}`,
+    )
+  }
+
+  /** Log a failed live reload with the workspace identity, never the config. */
+  private reportReloadError(entry: WorkspaceEntry, error: unknown): void {
+    this.selfCtx.logger.warn(
+      `workspace-cordis: reload of workspace ${entry.canonical} config (${workspaceConfigPath(entry.canonical)}) failed: ${WorkspaceRegistry.flattenError(error)}`,
+    )
+  }
+
   private release(entry: WorkspaceEntry): Promise<void> {
     if (entry.disposed) return Promise.resolve()
     entry.leases -= 1
     if (entry.leases > 0) return Promise.resolve()
-    // Final release: remove from the map first, so a failed dispose still
-    // leaves the workspace retryable with a fresh scope, then await disposal.
+    // Final release: mark disposed and remove from the maps first, so a
+    // failed teardown still leaves the workspace retryable with a fresh scope
+    // and no reload pass can publish into the dying entry; then stop the
+    // reload controller — cancelling any pending debounce, closing the
+    // watcher, and draining a running reload pass — before the scope (and
+    // whatever subtree is still mounted) goes down. A failing stop or scope
+    // disposal never skips the other side.
     entry.disposed = true
     this.entries.delete(entry.canonical)
     this.scopeRoots.delete(entry.key)
-    return Promise.resolve(entry.scope.dispose()).then(() => undefined)
+    return this.disposeEntry(entry)
   }
 }

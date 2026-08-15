@@ -53,7 +53,21 @@ export interface MountedWorkspaceTree {
    * that is never identical to the fiber appearing in a parent chain.
    */
   readonly fiber: Fiber
+  /**
+   * Dispose exactly this subtree and wait for its teardown.
+   *
+   * Idempotent: only the first call tears the subtree down; later calls —
+   * including one racing the first, and one arriving after the workspace
+   * scope has already unwound the tree — resolve with the same result. The
+   * workspace scope and every other child survive, which is what live reload
+   * relies on; the final scope disposal may safely encounter an
+   * already-disposed subtree.
+   */
+  dispose(): Promise<void>
 }
+
+/** What the constructor publishes before the mount's audit and disposer exist. */
+type MountedSubtree = Omit<MountedWorkspaceTree, 'dispose'>
 
 /**
  * Subtrees captured by config identity. A subtree plugged directly (rather
@@ -61,7 +75,7 @@ export interface MountedWorkspaceTree {
  * is the only handle to the rows it created; config objects are minted per
  * mount, so concurrent mounts cannot collide.
  */
-const mounted = new WeakMap<object, MountedWorkspaceTree>()
+const mounted = new WeakMap<object, MountedSubtree>()
 
 /**
  * The base URL bare specifiers resolve against, per pending mount, keyed by
@@ -156,10 +170,11 @@ function mountDetail(error: unknown): string {
  * Mount `workspace`'s `<workspace>/.dsh/cordis.yml` under `scopeCtx` and
  * return only once every row is usable.
  *
- * The subtree is owned by `scopeCtx`'s fiber, so it unwinds with the scope
- * and the caller receives no disposer; the registry's final lease release
- * disposes the scope, which tears the subtree down. A rejection leaves
- * nothing mounted.
+ * The subtree is owned by `scopeCtx`'s fiber, so it unwinds with the scope,
+ * and the returned handle also exposes an exact idempotent disposer for live
+ * reload without tearing down the parent workspace scope. The registry's
+ * final lease release remains the fallback owner. A rejection leaves nothing
+ * mounted.
  * @param scopeCtx - the workspace scope's context, from the registry lease.
  * @param workspace - the canonical workspace path whose config to mount.
  * @returns the mounted subtree's tree and fiber.
@@ -201,7 +216,18 @@ export async function mountWorkspaceTree(
         + 'a workspace service must sit behind an `isolate` realm or move to the host composition',
       )
     }
-    return subtree
+    // The plugin handle wraps the subtree fiber and its disposal is awaited;
+    // the memoized wrapper keeps the method idempotent under concurrent
+    // callers and after the scope has already unwound the tree.
+    let disposal: Promise<void> | undefined
+    return {
+      tree: subtree.tree,
+      fiber: subtree.fiber,
+      dispose: () => {
+        disposal ??= Promise.resolve(handle.dispose())
+        return disposal
+      },
+    }
   } catch (error) {
     try {
       await handle.dispose()

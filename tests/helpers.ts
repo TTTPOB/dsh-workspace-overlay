@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import WorkspaceRegistry, {
   defaultConfig,
   type WorkspaceRegistryConfig,
+  type WorkspaceRegistryRuntime,
 } from '../src/registry.js'
 
 /** A fully booted registry runtime over one temp root. */
@@ -28,25 +29,50 @@ export interface Harness {
 
 /**
  * Boot a Loader + workspace registry composition.
- * @param config - registry config, defaulting to `defaultConfig`.
+ * @param config - registry config (partial; the schema fills defaults), defaulting
+ * to `defaultConfig`.
+ * @param runtime - optional constructor-only seams (fake watcher/timer) for
+ * deterministic reload tests. The plugin loader cannot pass constructor
+ * arguments to a class plugin, so with a runtime the registry is constructed
+ * directly on a dedicated fiber — with the schema applied by hand to mirror
+ * the plugin path's defaults; without one the production `ctx.plugin` path is
+ * used verbatim.
  * @returns the booted runtime.
  */
 export async function harness(
-  config: WorkspaceRegistryConfig = defaultConfig,
+  config: Partial<WorkspaceRegistryConfig> = defaultConfig,
+  runtime?: WorkspaceRegistryRuntime,
 ): Promise<Harness> {
   const ctx = new Context()
   const root = await mkdtemp(join(tmpdir(), 'dsh-ws-overlay-'))
   ctx.baseUrl = pathToFileURL(join(root, 'host')).href + '/'
   await ctx.plugin(Loader)
   ctx.loader.builtins.include = Include
-  const fiber = await ctx.plugin(WorkspaceRegistry, config)
+  let fiber: Fiber
+  if (runtime === undefined) {
+    // The plugin machinery validates the partial config against the schema.
+    fiber = await ctx.plugin(WorkspaceRegistry, config as WorkspaceRegistryConfig)
+  } else {
+    const resolved = WorkspaceRegistry.Config(config as never)
+    fiber = await ctx.plugin((applyCtx: Context) => {
+      new WorkspaceRegistry(applyCtx, resolved, runtime)
+    })
+  }
   return { ctx, registry: ctx.workspaceCordis, fiber, root }
 }
 
-/** Tear a booted runtime down: dispose the composition and the temp root. */
+/**
+ * Tear a booted runtime down: dispose the composition first, then remove the
+ * temp root. Disposing first closes every entry's reload watcher while its
+ * files still exist, so the directory removal cannot produce unlink events
+ * that schedule pointless reload passes; both steps run even when one fails.
+ */
 export async function teardown(harnessed: Harness): Promise<void> {
-  await rm(harnessed.root, { recursive: true, force: true })
-  await harnessed.fiber.dispose()
+  try {
+    await harnessed.fiber.dispose()
+  } finally {
+    await rm(harnessed.root, { recursive: true, force: true })
+  }
 }
 
 /** The directory of this repository's committed test fixtures. */
@@ -138,6 +164,8 @@ export interface FixtureState {
   markers: string[]
   contexts: Context[]
   disposed: number
+  /** Markers of compositions whose activation has started but not finished. */
+  pending: string[]
 }
 
 /** Reset the fixture state for one test. */
@@ -146,6 +174,7 @@ export function resetFixtures(): void {
     markers: [],
     contexts: [],
     disposed: 0,
+    pending: [],
   }
   delete (globalThis as unknown as { __WS_SELF_DISPOSED__?: unknown }).__WS_SELF_DISPOSED__
 }
