@@ -81,6 +81,7 @@
   },
   "files": [
     "dist",
+    "docs",
     "cordis.patch.yml",
     "LICENSE"
   ],
