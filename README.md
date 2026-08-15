@@ -32,7 +32,7 @@ DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis sc
 - **Reload 事务**：事件突发去抖（默认 150ms）后，同一 workspace 的 pass 严格串行（pass 运行中到达的事件 coalesce 为恰好一次后续 pass，连续编辑下持续追平）；不同 workspace 的 reload 并行。pass 先 dispose 旧 `MountedWorkspaceTree` 子树并 await quiescence，再 stat 顶层文件：缺失 → 发布空 workspace layer；存在 → 挂载＋审计新子树。整树替换意味着所有正确 effect-owned 的 workspace 贡献——tools、prompt sections、skills、commands、scoped listeners、MCP 连接及其它资源——一起卸载重挂，不会出现半新半旧。
 - **Step boundary**：live Agent 跨 reload 存活。已组装或流式中的 model request 保留冻结的 request header 与 tool schema；下一个 model step 重新执行 `systemPrompt.assemble()`，观察到当前 scoped registry。旧 schema 生成的 tool call 可能与移除竞争并返回 `UNKNOWN_TOOL`（与全局 composition HMR 的边界一致；v1 不 drain 任意 in-flight 第三方工具调用）。
 - **失败语义**：初始挂载仍然严格（`acquire()` 拒绝且不残留缓存）；live reload 可恢复——旧树已卸载、失败的新树被完整回滚、workspace scope/lease/Agent 全部存活、workspace 贡献暂时缺失（MCP 行会退出进程并解除 mask）、状态置为 `failed`，日志只含 canonical 路径与 flattened error message（绝不落 config/env/header 值），下一个文件事件自动重试。
-- **MCP 交互**：workspace MCP 行随 reload 整行替换——旧进程退出、新进程以 workspace 自己的 cwd/env 启动、对 global 同名 namespace 的 mask 在串行 commit 链上重建（替换 restriction 先安装、旧 mask 后移除，无完全解除遮蔽的窗口）；broken MCP startup 使 reload 失败但不杀 Agent/workspace，修复文件后重试成功。
+- **MCP 交互**：workspace MCP 行随 reload 整行替换——旧进程退出、新进程以 workspace 自己的 cwd/env 启动、对 global 同名 namespace 的 mask 在串行 commit 链上重建。单次 mask rebuild 会先安装 replacement restriction、再移除旧 restriction；但整笔 WorkspaceTree reload 先卸载旧行与旧 mask，新连接 ready 后才创建新 mask，因此中间可能短暂重新继承 global 同名 namespace。broken MCP startup 使 reload 失败但不杀 Agent/workspace，修复文件后重试成功。
 - **Final lease**：最后一个租约释放时先标记 disposed 并从查找表移除，然后 stop controller——拒绝新事件 → 取消 pending debounce → close watcher → drain 运行中的 pass（允许跑完但不启动后续 pass）——再 `scope.dispose()`；不留 watcher、timer、composition、工具、mask 或子进程。registry fiber unload（provider HMR／Host teardown）对全部 live entry 走同一路径。
 - **trust=false / watch=false**：`trustWorkspaceConfig: false` 时不 parse/import/mount/watch，仍是空 scoped layer；`watchWorkspaceConfig: false` 只做首次挂载，之后文件变化不产生任何反应。
 
@@ -40,7 +40,7 @@ DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis sc
 
 - 不 watch preset `agent.cordis.yml`，也不在 preset 换代时自动 rebind live Agent；
 - 不 watch 被 composition import 的 JS/package 模块，不 watch nested include 的 YAML，不跟踪任何依赖关系——编辑依赖文件后 touch 或重新保存顶层 `cordis.yml` 即可触发一次完整 remount（顶层文件才是 reload 单位）；
-- 不 drain 任意 in-flight 的第三方工具调用；
+- 不 drain 任意 in-flight 的第三方工具调用，也不为第三方 row 的 `apply()`／dispose 提供额外 mount timeout；永久 pending 的第三方生命周期会让当前 reload 与最后 lease release 等待它收敛；
 - 不做 blue-green：不并行生成候选树，失败后不保留上一好树（与 DSH 全局 patch HMR 的运行模型一致）；
 - 不支持 structural `workspace-agent-integration`／`workspace-mcp-manager` provider 自身的 live HMR（与 decorator 同级，开发时需先 dispose 全部 live Agent 或重启 Host）。
 
