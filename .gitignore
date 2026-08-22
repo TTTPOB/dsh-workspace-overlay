@@ -3,5 +3,4 @@ dist/
 coverage/
 .artifacts/
 .test-dsh-home/
-.pnpm-store/
 *.tsbuildinfo
