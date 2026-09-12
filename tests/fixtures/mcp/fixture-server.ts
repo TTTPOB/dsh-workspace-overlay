@@ -4,7 +4,7 @@
  * Adapted from the official rc.6 `dsh-mcp-client` fixture server (MIT,
  * Copyright (c) 2026 DeepSeek — see the repository README for attribution),
  * extended with env-driven modes so one spawn can exercise startup failure,
- * duplicate/bad-schema tool lists, pagination, list-changed resync, env
+ * duplicate/full-schema tool lists, pagination, list-changed resync, env
  * scrubbing, cwd, timeouts, and crash recovery.
  *
  * Run: node fixture-server.ts
@@ -219,7 +219,7 @@ server.setRequestHandler(ListToolsRequestSchema, async request => {
           ...all.filter(tool => tool.name === 'add'),
           {
             name: 'exotic',
-            description: 'Tool whose input schema uses an unsupported vocabulary.',
+            description: 'Tool whose input schema uses vocabulary passed through by the MCP bridge.',
             inputSchema: { type: 'object', patternProperties: { '^x-': { type: 'string' } } },
           },
         ],

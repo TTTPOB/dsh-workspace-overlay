@@ -9,20 +9,13 @@
  * constraints. The raw name is only ever sent on the wire (`tools/call`); the
  * public name is never parsed to recover it.
  *
- * Ported from the rc.6 `@deepseek-ai/dsh-mcp-client` `tools.ts` (MIT,
- * Copyright (c) 2026 DeepSeek — see the repository README for attribution),
- * verified against the installed rc.6 `lib/types/tools.d.ts`. Two deliberate
- * extensions on top of the official implementation, both requested by the
- * workspace overlay roadmap:
- *
- * - Input schemas are asserted against the supported JSON Schema subset in
- *   the fetch phase (`assertSupportedJsonSchema`), so an unsupported input
- *   vocabulary fails the whole sync transactionally (previous generation
- *   retained) instead of registering a tool the model layer cannot project.
- *   Official rc.6 validates only advertised output schemas (with a JsonValue
- *   fallback) and passes input schemas through unvalidated.
- * - `ToolBridgeOptions.onGeneration` observes committed generation changes
- *   for the future workspace manager; no mask is implemented here.
+ * Ported from `@deepseek-ai/dsh-mcp-client` `tools.ts` (MIT, Copyright (c)
+ * 2026 DeepSeek — see the repository README for attribution) and kept aligned
+ * with the current daily-driver implementation. MCP input schemas pass through
+ * unchanged, while unsupported advertised output schemas fall back to
+ * `JsonValue`, matching the official bridge. `ToolBridgeOptions.onGeneration`
+ * is the workspace-only extension used by the manager to track committed tool
+ * generations and rebuild namespace masks.
  *
  * @module dsh-workspace-overlay/mcp/tools
  */
@@ -113,9 +106,8 @@ export function publicToolName(serverName: string, rawName: string): string {
  *
  * 1. Fetch: drain uncached `tools/list` pagination and build the full next
  *    generation of `ToolDefinition`s under public names. Any failure here
- *    (network error, duplicate raw name in the server's list, unsupported
- *    input schema) rejects and leaves the previous generation registered
- *    untouched.
+ *    (network error or duplicate raw name in the server's list) rejects and
+ *    leaves the previous generation registered untouched.
  * 2. Swap: dispose the previous generation, register the new one. A registry
  *    conflict here can only mean a foreign registration squats on this
  *    server's `mcp__<serverName>__` namespace — the partial generation is
@@ -152,7 +144,7 @@ export async function syncTools(
       definitions.set(publicName, {
         name: publicName,
         description: tool.description ?? '',
-        parameters: supportedInputSchema(opts.serverName, tool.name, tool.inputSchema),
+        parameters: tool.inputSchema,
         output: createOutput(tool.name, supportedOutputSchema(tool.outputSchema)),
         execute: createExecutor(client, tool.name, tool.execution?.taskSupport === 'required', opts),
       })
@@ -191,26 +183,6 @@ interface McpContentBlock {
   type: string
   text?: string
   mimeType?: string
-}
-
-/**
- * Assert the server's input schema is within the supported subset. Divergence
- * from official rc.6 (which validates only output schemas): an unsupported
- * input vocabulary fails this sync's fetch phase, keeping the previous good
- * generation registered.
- */
-function supportedInputSchema(serverName: string, toolName: string, candidate: unknown): Record<string, unknown> {
-  try {
-    assertSupportedJsonSchema(candidate)
-    // JsonSchemaNode has no index signature; the registry's ToolSchema
-    // contract is a plain record, so the asserted node widens to it.
-    return candidate as Record<string, unknown>
-  } catch (error) {
-    throw new Error(
-      `mcp-client(${serverName}): tool "${toolName}" declares an unsupported input schema — invalid tool list`,
-      { cause: error },
-    )
-  }
 }
 
 /** Keep a supported advertised schema; unsupported MCP vocabulary falls back to JsonValue. */

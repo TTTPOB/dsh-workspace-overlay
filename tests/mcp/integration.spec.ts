@@ -184,12 +184,13 @@ describe('fixture server — startup failure policy', () => {
     expect(ctx.tools.schemas().some(schema => schema.name.startsWith('mcp__dup__'))).toBe(false)
   })
 
-  it('failOnStartupError=true rejects apply for an unsupported input schema', async () => {
-    await expect(apply(ctx, fixtureConfig('bad', {
+  it('failOnStartupError=true accepts full MCP input schema vocabulary', async () => {
+    await expect(apply(ctx, fixtureConfig('schema', {
       env: { MCP_FIXTURE_MODE: 'bad-schema-list', MCP_FIXTURE_MARKER: marker },
       failOnStartupError: true,
-    }))).rejects.toThrow('initial connection or tool synchronization failed')
-    expect(ctx.tools.schemas().some(schema => schema.name.startsWith('mcp__bad__'))).toBe(false)
+    }))).resolves.toBeUndefined()
+    expect(ctx.tools.schemas().map(schema => schema.name).filter(name => name.startsWith('mcp__schema__')))
+      .toEqual(['mcp__schema__add', 'mcp__schema__exotic'])
   })
 
   it('failOnStartupError=true rejects apply when the server exits on start', async () => {

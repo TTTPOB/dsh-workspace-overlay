@@ -1,8 +1,8 @@
 /**
  * Tool bridge tests: public naming (against known-answer values derived from
  * the installed rc.6 bundle), transactional generation swaps, pagination,
- * input-schema assertion, callTool timeout/cancellation, and the McpResult
- * mapping — all against a mock MCP client, mirroring the official rc.6 suite.
+ * official input-schema pass-through, callTool timeout/cancellation, and the
+ * McpResult mapping — all against a mock MCP client.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -138,15 +138,36 @@ describe('syncTools', () => {
     expect(ctx.tools.get('mcp__srv__dup')).toBeUndefined()
   })
 
-  it('rejects an unsupported input schema in the fetch phase', async () => {
+  it('passes full MCP input schemas through like the official bridge', async () => {
+    const paperSearchSchema = {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        year: {
+          anyOf: [{ type: 'string' }, { type: 'null' }],
+          default: null,
+        },
+      },
+      required: ['query'],
+    }
+    const bioMcpSchema = {
+      type: 'object',
+      properties: {
+        sections: { type: 'array', items: { $ref: '#/$defs/Section' } },
+      },
+      $defs: { Section: { type: 'string', enum: ['all', 'genes'] } },
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+    }
     const client = createMockClient([
-      { name: 'good', inputSchema: { type: 'object' } },
-      { name: 'exotic', inputSchema: { type: 'object', patternProperties: { '^x-': { type: 'string' } } } },
+      { name: 'paper_search', inputSchema: paperSearchSchema },
+      { name: 'biomcp_get', inputSchema: bioMcpSchema },
     ])
 
-    await expect(syncTools(client as unknown as Client, ctx, defaultOpts, new Map()))
-      .rejects.toThrow(/tool "exotic" declares an unsupported input schema/)
-    expect(ctx.tools.get('mcp__srv__good')).toBeUndefined()
+    const disposers = await syncTools(client as unknown as Client, ctx, defaultOpts, new Map())
+
+    expect(disposers.size).toBe(2)
+    expect(ctx.tools.get('mcp__srv__paper_search')?.parameters).toBe(paperSearchSchema)
+    expect(ctx.tools.get('mcp__srv__biomcp_get')?.parameters).toBe(bioMcpSchema)
   })
 
   it('keeps the previous generation when the fetch phase fails', async () => {

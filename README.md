@@ -61,14 +61,11 @@ dsh plugin --profile web add /path/to/dsh-workspace-overlay
 - `./mcp/types`：判别联合 `Config`（`stdio` / `streamable-http`）、`serverName`、`toolCallTimeoutMs`、`failOnStartupError`、`reconnect` 策略、`McpResult`、`ConnectionHandle` 等公开类型。
 - `./mcp/config`：Schemastery `Config` schema（与官方默认值一致：`toolCallTimeoutMs=60000`、`failOnStartupError=false`、`reconnect` 默认 `{enabled:true, initialDelayMs:500, maxDelayMs:30000, maxAttempts:10}`）。
 - `./mcp/transport`：`createTransport(config)`。stdio 用 `dsh-subprocess` 的 `scrubbedParentEnv()` 再合并显式 `env`，argv spawn（SDK `shell:false`），支持 `cwd`；streamable-http 传 URL/headers。任何路径都不把 env/headers 值写入日志。
-- `./mcp/tools`：`publicToolName`（`mcp__<serverName>__<rawName>`，超长/非法字符时追加 12 位 SHA-256 identity hash，已知答案值取自安装版 rc.6 bundle）、分页 `listTools`、事务化两阶段 `syncTools`（fetch 失败保留上一好代；swap 冲突整代回滚）、`callTool` timeout/cancellation 与 `McpResult` 映射（含 `isError`→throw、legacy `toolResult`、content block 投影）。
+- `./mcp/tools`：`publicToolName`（`mcp__<serverName>__<rawName>`，超长/非法字符时追加 12 位 SHA-256 identity hash）、分页 `listTools`、事务化两阶段 `syncTools`（fetch 失败保留上一好代；swap 冲突整代回滚）、与当前官方 bridge 一致的 input schema 原样透传和不支持 output schema 回退、`callTool` timeout/cancellation 与 `McpResult` 映射（含 `isError`→throw、legacy `toolResult`、content block 投影）。
 - `./mcp/connection`：`RECONNECT_DEFAULTS`、`resolveReconnectPolicy`（复用 `MAX_TIMER_DELAY_MS`）、`startConnection` supervisor——startup 失败策略、`list_changed` 重新同步、指数退避/尝试预算（稳定窗口重置预算）、dispose 关闭 client/transport 并等待工具注销，不留子进程。
 - `./mcp`：官方同构的 `name`/`inject`/`Config`/`apply` 入口（含 `serverName` 保留），保留给与官方语义一致的纯 global 独立使用；workspace-aware 行一律走 `./mcp/workspace-client`。
 
-与官方 rc.6 的两处有意的差异（均已注释在源码中）：
-
-1. **输入 schema 断言**：fetch 阶段对 `tool.inputSchema` 运行 `assertSupportedJsonSchema`，不支持的词汇使该次同步整体失败（保留上一好代）；官方只断言 output schema（不支持时回退 `JsonValue`），输入 schema 直接透传。
-2. **代变化通知**：`ToolBridgeOptions.onGeneration({serverName, names, status})` 与 `startConnection(ctx, config, policy, onGeneration?)` 在每次提交的代变化（注册成功 / 整代回滚 / give-up / dispose）时同步通知；workspace manager 消费它维护 global/own 名字集合并重建 mask（见下节）。
+相对当前官方 MCP bridge，MCP 工具同步只保留 workspace ownership 所需的一项行为扩展：`ToolBridgeOptions.onGeneration({serverName, names, status})` 与 `startConnection(ctx, config, policy, onGeneration?)` 在每次提交的代变化（注册成功／整代回滚／give-up／dispose）时同步通知；workspace manager 消费它维护 global/own 名字集合并重建 mask（见下节）。Input schema 与官方实现一样原样透传，不因 `$schema`、`$defs`、`$ref`、`anyOf` 或其它 MCP JSON Schema 词汇拒绝工具代。
 
 依赖策略：`@modelcontextprotocol/sdk`、`zod`为纯SDK，走`dependencies`；`@deepseek-ai/dsh-tools`、`dsh-subprocess`、`dsh-timeout`涉及Host单例或运行时API，按`peerDependencies` + `devDependencies`（版本与安装版rc.6一致）。`@deepseek-ai/dsh-mcp-client`只作为开发依赖用于Config parity测试，移植代码不在运行时import它。
 
