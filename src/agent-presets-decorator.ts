@@ -38,11 +38,11 @@
  */
 import { symbols, type Context } from '@deepseek-ai/cordis'
 import {
-  PresetMountError,
   standingMountFor,
   type AgentPreset,
   type AgentPresets,
 } from '@deepseek-ai/dsh-agent-presets'
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { scopeOf, type ScopeKey } from '@deepseek-ai/dsh-scope'
 import type { AgentBindingCoordinator } from './coordinator.js'
 import { installMethodWrapper } from './method-wrapper.js'
@@ -72,7 +72,12 @@ function requireAgentKey(agentCtx: Context, what: string): ScopeKey {
  */
 async function resolveMountable(thisArg: AgentPresets, id: string | undefined): Promise<AgentPreset> {
   const preset = await thisArg.resolve(id)
-  if (preset.broken !== undefined) throw new PresetMountError(preset.id, preset.broken)
+  if (preset.broken !== undefined) {
+    throw new RemoteError('agent-preset/invalid', `agent-presets: preset "${preset.id}" failed to mount: ${preset.broken}`, {
+      agentPreset: preset.id,
+      reason: preset.broken,
+    })
+  }
   return preset
 }
 

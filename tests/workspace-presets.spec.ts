@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { scopeOf, scopeParentOf } from '@deepseek-ai/dsh-scope'
-import { PresetMountError, type AgentPreset } from '@deepseek-ai/dsh-agent-presets'
+import type { AgentPreset } from '@deepseek-ai/dsh-agent-presets'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -137,7 +137,7 @@ describe('WorkspacePresetRegistry', () => {
     const ws = await makeWorkspace(host.root, 'ws')
     const lease = await host.registry.acquire(ws)
 
-    await expect(manager.ensure(lease, presetOf('standard'))).rejects.toBeInstanceOf(PresetMountError)
+    await expect(manager.ensure(lease, presetOf('standard'))).rejects.toMatchObject({ code: 'agent-preset/invalid' })
     await expect(manager.ensure(lease, presetOf('standard'))).rejects.toThrow(/unreadable/)
 
     // Failure left no cached state: the fixed file mounts on retry.
@@ -152,7 +152,7 @@ describe('WorkspacePresetRegistry', () => {
     const ws = await makeWorkspace(host.root, 'ws')
     const lease = await host.registry.acquire(ws)
 
-    await expect(manager.ensure(lease, presetOf('standard'))).rejects.toBeInstanceOf(PresetMountError)
+    await expect(manager.ensure(lease, presetOf('standard'))).rejects.toMatchObject({ code: 'agent-preset/invalid' })
     expect(fixtureState().markers).toEqual([])
 
     await writeFile(join(presetsRoot, 'standard', 'agent.cordis.yml'), markerPreset('rescued'))

@@ -4,7 +4,7 @@
 
 DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis scope（`workspaceCordis` service）。同一 workspace 的所有消费者（session、agent）租用同一个 scope；最后一个租约释放时 scope 被 dispose。可选地，首个租约会把 `<workspace>/.dsh/cordis.yml` 挂载为该 workspace 的 Cordis composition，并默认监听该顶层配置文件——编辑保存即整树热重载（见「Workspace 热重载」）；bundle 同时接线 Agent 集成：`ctx.agents.create/resume` 前置 workspace 绑定，官方 `agentPresets` 的 mount/composeFrom/recompose 被 decorator 接管为 workspace-local preset generation（见下文「Agent 集成」）。`./mcp` 子路径提供从官方 rc.6 `@deepseek-ai/dsh-mcp-client` 移植的 MCP core（transport / tool sync / connection supervisor），以及 workspace-aware MCP manager + 插件入口（global 每 serverName 一进程、workspace override 每 workspace 一进程、继承 global 的 workspace 零额外进程、同名 namespace 整体遮蔽，见「MCP manager」）。
 
-目标 DSH：`0.1.0-rc.6`。运行时peer包括`@deepseek-ai/cordis` 4.0.1、`@deepseek-ai/dsh-scope` 0.1.0-rc.6、`@deepseek-ai/cordis-plugin-include` 1.0.6、`@deepseek-ai/cordis-plugin-loader` 1.0.2、`@deepseek-ai/dsh-agent-presets` 0.1.0-rc.6及代码实际import的DSH service包；版本均与安装版一致。`@deepseek-ai/dsh-mcp-client` 0.1.0-rc.6只作为开发依赖用于Config parity测试。
+开发与发布验证基线：DSH service 包 `0.1.5-rc.2`、Cordis `4.0.2`、Include `1.0.7`、Loader `1.0.3`。共享运行时包声明为 peer，开发依赖固定测试基线；运行时必须与 Host 解析到同一个模块实例。RC 兼容范围按 `package.json` 声明，不自动承诺跨 RC 基线兼容。`@deepseek-ai/dsh-mcp-client` 只作为开发依赖用于 Config parity 测试。
 
 ## API（`./registry`）
 
@@ -49,7 +49,8 @@ DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis sc
 ## 安装（bundle）
 
 ```sh
-dsh plugin --profile web add /path/to/dsh-workspace-overlay
+dsh plugin --profile web add https://github.com/TTTPOB/dsh-workspace-overlay/releases/download/v0.1.1/dsh-workspace-overlay-0.1.1.tgz
+dsh --profile web --dump-config
 ```
 
 包内 `dsh.bundle.patch`（`cordis.patch.yml`）插入三行：`workspace-registry`（`workspaceCordis` provider）、`workspace-mcp-manager`（`workspaceMcp` provider）与 `workspace-agent-integration`（`dsh-workspace-overlay/integration-plugin`，AgentRegistry + agentPresets decorator 接线，见下文）。`workspace-registry` 行的 patch config 显式写出 `trustWorkspaceConfig: true`／`watchWorkspaceConfig: true`／`reloadDebounceMs: 150`——patch 覆盖行会整行替换 config，显式写出部署值（与 schema 默认一致）让 `dsh --dump-config` 直接可见。manager 行不配置任何默认 MCP server：global MCP 行由 profile patch 按需添加（见「MCP manager」示例），workspace MCP 行写在各 workspace 的 `.dsh/cordis.yml` 里。
@@ -67,7 +68,7 @@ dsh plugin --profile web add /path/to/dsh-workspace-overlay
 
 相对当前官方 MCP bridge，MCP 工具同步只保留 workspace ownership 所需的一项行为扩展：`ToolBridgeOptions.onGeneration({serverName, names, status})` 与 `startConnection(ctx, config, policy, onGeneration?)` 在每次提交的代变化（注册成功／整代回滚／give-up／dispose）时同步通知；workspace manager 消费它维护 global/own 名字集合并重建 mask（见下节）。Input schema 与官方实现一样原样透传，不因 `$schema`、`$defs`、`$ref`、`anyOf` 或其它 MCP JSON Schema 词汇拒绝工具代。
 
-依赖策略：`@modelcontextprotocol/sdk`、`zod`为纯SDK，走`dependencies`；`@deepseek-ai/dsh-tools`、`dsh-subprocess`、`dsh-timeout`涉及Host单例或运行时API，按`peerDependencies` + `devDependencies`（版本与安装版rc.6一致）。`@deepseek-ai/dsh-mcp-client`只作为开发依赖用于Config parity测试，移植代码不在运行时import它。
+依赖策略：`@modelcontextprotocol/sdk`、`zod` 为纯 SDK，走 `dependencies`；共享 DSH/Cordis 包使用 `peerDependencies` + 固定基线的 `devDependencies`。`@deepseek-ai/dsh-mcp-client` 只用于开发期 Config parity 测试，移植代码不在运行时 import 它。
 
 **已接线的 manager / bundle**：`cordis.patch.yml` 新增 `workspace-mcp-manager` provider 行（`workspaceMcp` service），但**不自动插入任何 MCP server**——没有默认 server，启用 bundle 不会启动任何 MCP 进程。global 与 workspace 的 MCP 行都通过同一个入口 `dsh-workspace-overlay/mcp/workspace-client` 声明，由 manager 按行的 scope 决定语义。per-workspace MCP server 编排（进程模型、`tools.restrict` mask、生命周期）见下节。
 
@@ -149,6 +150,8 @@ Workspace 行（`<workspace>/.dsh/cordis.yml`）：
 - streamable-http 行同样支持（无 cwd 语义）；workspace 行同样强制 `failOnStartupError: true`。
 
 ## 开发
+
+日常 Host 使用 Release tarball，不直接 link 开发目录；link 会让 Node 优先加载开发目录内另一份 DSH/Cordis。安装后检查实际模块解析，并从外部重启 Host。与 envrc 同用时，`dsh.profile.bundles` 必须保持 overlay 在 envrc 前。发布与依赖升级流程见 [发布说明](docs/releases.md)。
 
 ```sh
 pnpm install

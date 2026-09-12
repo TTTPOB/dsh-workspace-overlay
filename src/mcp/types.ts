@@ -11,7 +11,7 @@
  *
  * @module dsh-workspace-overlay/mcp/types
  */
-import type { JsonValue } from '@deepseek-ai/dsh-tools'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 /** Config for connecting to an MCP server via a spawned child process over stdio. */
 export interface StdioConfig {

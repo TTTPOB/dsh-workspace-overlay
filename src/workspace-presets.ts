@@ -30,7 +30,8 @@
  *
  * @module dsh-workspace-overlay/workspace-presets
  */
-import { mountPreset, PresetMountError, type AgentPreset } from '@deepseek-ai/dsh-agent-presets'
+import { mountPreset, type AgentPreset } from '@deepseek-ai/dsh-agent-presets'
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { createScope, type Scope, type ScopeKey } from '@deepseek-ai/dsh-scope'
 import { stat } from 'node:fs/promises'
 import type { WorkspaceLease } from './registry.js'
@@ -165,14 +166,18 @@ export class WorkspacePresetRegistry {
    * actually binds an agent to it.
    * @param lease - the workspace lease the generation is scoped to.
    * @param preset - the resolved preset to compose.
-   * @throws `PresetMountError` when the composition is unreadable or unusable.
+   * @throws `RemoteError` when the composition is unreadable or unusable.
    */
   async ensure(lease: WorkspaceLease, preset: AgentPreset): Promise<PresetGeneration> {
     const state = this.stateFor(lease.key)
     for (;;) {
       const stamp = await compositionStamp(preset.path)
       if (stamp === undefined) {
-        throw new PresetMountError(preset.id, `composition file is unreadable: ${preset.path}`)
+        const reason = `composition file is unreadable: ${preset.path}`
+        throw new RemoteError('agent-preset/invalid', `agent-presets: preset "${preset.id}" failed to mount: ${reason}`, {
+          agentPreset: preset.id,
+          reason,
+        })
       }
       const current = state.current.get(preset.id)
       if (current !== undefined && sameStamp(current.stamp, stamp)) return current
@@ -223,7 +228,7 @@ export class WorkspacePresetRegistry {
    * Mount one preset generation under a fresh scope child of the workspace
    * scope. The key is always a new object — a generation's identity must
    * never alias another scope's. A mount failure disposes the fresh scope and
-   * propagates the official `PresetMountError`.
+   * propagates the official `RemoteError`.
    */
   private async createGeneration(
     lease: WorkspaceLease,

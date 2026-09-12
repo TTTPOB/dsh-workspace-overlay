@@ -9,7 +9,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { appendFile, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -44,8 +44,8 @@ export function sleep(ms: number): Promise<void> {
 export const testToolSignal: AbortSignal = new AbortController().signal
 
 let callSeq = 0
-export function nextCallId(): CallId {
-  return CallId(`mcp-spec-${++callSeq}`)
+export function nextCallId(): ToolCallId {
+  return ToolCallId(`mcp-spec-${++callSeq}`)
 }
 
 /**

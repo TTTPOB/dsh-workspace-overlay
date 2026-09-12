@@ -7,7 +7,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { KNOWN_FIXTURE_HASH_NAME, KNOWN_LONG_NAME, KNOWN_SRV_HASH_NAME, mountRegistry, nextCallId, sleep, testToolSignal } from './helpers.js'
 import { publicToolName, syncTools } from '../../src/mcp/tools.js'
 import type { GenerationNotification, ToolBridgeOptions } from '../../src/mcp/types.js'
@@ -468,7 +468,7 @@ describe('tool execution', () => {
     const controller = new AbortController()
     const pending = ctx.tools.execute({
       signal: controller.signal,
-      callId: CallId('cancel-me'), name: 'mcp__srv__hang', arguments: {},
+      callId: ToolCallId('cancel-me'), name: 'mcp__srv__hang', arguments: {},
     })
     await sleep(10)
     controller.abort()

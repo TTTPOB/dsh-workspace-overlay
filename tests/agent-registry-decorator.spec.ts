@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { bindScopeParent, createScope, scopeOf, type Scope } from '@deepseek-ai/dsh-scope'
 import type {
+  Agent,
   AgentRegistry,
   AgentSetup,
   CreateAgentOptions,
@@ -75,7 +76,7 @@ class StubRegistry {
     }
     try {
       this.setupCalls += 1
-      const commit = await setup?.(agent.ctx)
+      const commit = await setup?.(agent.ctx, agent as unknown as Agent)
       commit?.commit()
     } catch (error) {
       await scope?.dispose()
@@ -161,9 +162,10 @@ describe('installAgentRegistryDecorators', () => {
     const ws = join(root, 'ws')
     await mkdir(ws)
     const { stub, coordinator, callerCtx, dispose } = setup()
-    const seen: { key?: object } = {}
-    const callerSetup = (agentCtx: Context): void => {
+    const seen: { key?: object; agent?: Agent } = {}
+    const callerSetup = (agentCtx: Context, agent: Agent): void => {
       seen.key = scopeOf(agentCtx)
+      seen.agent = agent
     }
 
     const result = await callAsShadow<StubPublish>(stub, 'create', shadowOf(stub, callerCtx), [
@@ -180,6 +182,7 @@ describe('installAgentRegistryDecorators', () => {
     expect(stub.setupCalls).toBe(1)
     // The scope key is the agent itself; the setup read its session cwd.
     expect(seen.key === result.agent).toBe(true)
+    expect(seen.agent).toBe(result.agent)
     expect(coordinator.recordFor(result.agent)?.lease.canonical).toBe(await realpath(ws))
 
     // Success: the lease outlives publish and is only released on scope dispose.
@@ -195,9 +198,10 @@ describe('installAgentRegistryDecorators', () => {
     await mkdir(ws)
     const { stub, coordinator, callerCtx, dispose } = setup()
     stub.resumeCwd = ws
-    const seen: { key?: object } = {}
-    const callerSetup = (agentCtx: Context): void => {
+    const seen: { key?: object; agent?: Agent } = {}
+    const callerSetup = (agentCtx: Context, agent: Agent): void => {
       seen.key = scopeOf(agentCtx)
+      seen.agent = agent
     }
 
     const result = await callAsShadow<StubPublish>(stub, 'resume', shadowOf(stub, callerCtx), [
@@ -206,6 +210,7 @@ describe('installAgentRegistryDecorators', () => {
 
     expect(result.ownerCtx).toBe(callerCtx)
     expect(seen.key).toBe(result.agent)
+    expect(seen.agent).toBe(result.agent)
     expect(host.registry.size).toBe(1)
     await result.dispose()
     expect(host.registry.size).toBe(0)

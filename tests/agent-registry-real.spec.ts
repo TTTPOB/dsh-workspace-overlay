@@ -39,7 +39,7 @@ function createFactory(createCwd: string, resumeCwd: string, owners: Context[]):
     const scope = createScope(ownerCtx, agent)
     const agentCtx = scope.ctx.extend({ agent })
     try {
-      const commit = await setup?.(agentCtx)
+      const commit = await setup?.(agentCtx, agent)
       commit?.commit()
     } catch (error) {
       await scope.dispose()

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { symbols, type Fiber } from '@deepseek-ai/cordis'
+import SessionProjections from '@deepseek-ai/dsh-session-projection'
 import type { AgentRegistry, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import { AgentPresets, type Config as RosterConfig } from '@deepseek-ai/dsh-agent-presets'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -36,7 +37,9 @@ beforeEach(async () => {
     default: 'standard',
     roots: [{ path: presetsRoot, trust: 'system' }],
     includeUserRoot: false,
+    includeShippedRoot: false,
   }
+  await host.ctx.plugin(SessionProjections)
   await host.ctx.plugin(AgentPresets, roster)
 })
 

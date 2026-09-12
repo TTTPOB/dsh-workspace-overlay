@@ -4,7 +4,7 @@
 
 Out-of-tree DSH plugin that provides a shared Cordis scope (`workspaceCordis` service) per canonical workspace path. Every consumer of the same workspace (sessions, agents) leases the same scope; the scope is disposed when the last lease is released. Optionally, the first lease mounts `<workspace>/.dsh/cordis.yml` as that workspace's Cordis composition and, by default, watches that top-level config file — editing and saving it hot-reloads the whole composition (see "Workspace hot reload"); the bundle also wires up Agent integration: `ctx.agents.create/resume` are wrapped with workspace binding, and decorators route the official `agentPresets` `mount`/`composeFrom`/`recompose` methods through workspace-local preset generations (see "Agent integration" below). The `./mcp` subpath provides the MCP core ported from the official rc.6 `@deepseek-ai/dsh-mcp-client` (transport / tool sync / connection supervisor), plus a workspace-aware MCP manager and plugin entry (global rows: one process per `serverName`; workspace overrides: one process per workspace; workspaces inheriting the global instance: zero extra processes; same-named namespaces are wholly shadowed — see "MCP manager").
 
-Target DSH: `0.1.0-rc.6`. Runtime peers include `@deepseek-ai/cordis` 4.0.1, `@deepseek-ai/dsh-scope` 0.1.0-rc.6, `@deepseek-ai/cordis-plugin-include` 1.0.6, `@deepseek-ai/cordis-plugin-loader` 1.0.2, `@deepseek-ai/dsh-agent-presets` 0.1.0-rc.6, and the DSH service packages the code actually imports; all versions match the installed release. `@deepseek-ai/dsh-mcp-client` 0.1.0-rc.6 is a dev dependency only, used for Config parity tests.
+Development and release baseline: DSH service packages `0.1.5-rc.2`, Cordis `4.0.2`, Include `1.0.7`, and Loader `1.0.3`. Shared runtime packages are peers with pinned development versions. They must resolve to the same module instances as the Host. RC compatibility follows the ranges in `package.json`; later RC baselines require validation. `@deepseek-ai/dsh-mcp-client` is a dev dependency only, used for Config parity tests.
 
 ## API (`./registry`)
 
@@ -49,7 +49,8 @@ The detailed design, readiness details, and the full test matrix are in [`worksp
 ## Installation (bundle)
 
 ```sh
-dsh plugin --profile web add /path/to/dsh-workspace-overlay
+dsh plugin --profile web add https://github.com/TTTPOB/dsh-workspace-overlay/releases/download/v0.1.1/dsh-workspace-overlay-0.1.1.tgz
+dsh --profile web --dump-config
 ```
 
 The package's `dsh.bundle.patch` (`cordis.patch.yml`) inserts three rows: `workspace-registry` (`workspaceCordis` provider), `workspace-mcp-manager` (`workspaceMcp` provider) and `workspace-agent-integration` (`dsh-workspace-overlay/integration-plugin`, AgentRegistry + agentPresets decorator wiring, see below). The `workspace-registry` row's patch config states `trustWorkspaceConfig: true` / `watchWorkspaceConfig: true` / `reloadDebounceMs: 150` explicitly — a patch row replaces the target row's whole config, so stating the deployed values (which match the schema defaults) keeps them visible in `dsh --dump-config`. The manager row configures no default MCP servers: global MCP rows are added by profile patch as needed (see the "MCP manager" example), and workspace MCP rows are written into each workspace's `.dsh/cordis.yml`.
@@ -70,7 +71,7 @@ Two intentional differences from official rc.6 (both commented in the source):
 1. **Input schema assertion**: the fetch phase runs `assertSupportedJsonSchema` on `tool.inputSchema`; an unsupported vocabulary fails that whole sync (keeping the previous good generation). The official code only asserts the output schema (falling back to `JsonValue` when unsupported) and passes input schemas through.
 2. **Generation-change notification**: `ToolBridgeOptions.onGeneration({serverName, names, status})` and `startConnection(ctx, config, policy, onGeneration?)` notify synchronously after each committed generation change (registration success / whole-generation rollback / give-up / dispose); the workspace manager consumes the notifications to maintain the global/own name sets and rebuild masks (next section).
 
-Dependency strategy: `@modelcontextprotocol/sdk` and `zod` are pure SDKs and live in `dependencies`; `@deepseek-ai/dsh-tools`, `dsh-subprocess` and `dsh-timeout` involve Host singletons or runtime APIs and are declared as `peerDependencies` + `devDependencies` (versions matching the installed rc.6). `@deepseek-ai/dsh-mcp-client` is a dev dependency only, used for Config parity tests; the ported code never imports it at runtime.
+Dependency strategy: `@modelcontextprotocol/sdk` and `zod` live in `dependencies`; shared DSH/Cordis packages are `peerDependencies` with pinned `devDependencies`. `@deepseek-ai/dsh-mcp-client` is used only for development Config parity tests; the ported code never imports it at runtime.
 
 **Wired-in manager / bundle**: `cordis.patch.yml` adds the `workspace-mcp-manager` provider row (`workspaceMcp` service), but **inserts no MCP server by default** — there are no default servers, so enabling the bundle starts no MCP processes. Global and workspace MCP rows are both declared through the same entry `dsh-workspace-overlay/mcp/workspace-client`, and the manager decides the semantics from the row's scope. Per-workspace MCP server orchestration (process model, `tools.restrict` mask, lifecycle) is described in the next section.
 

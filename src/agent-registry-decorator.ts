@@ -60,7 +60,7 @@ export function composeAgentSetup(
   coordinator: AgentBindingCoordinator,
   workspaceCordis: WorkspaceRegistry,
 ): AgentSetup {
-  return async (agentCtx: Context) => {
+  return async (agentCtx: Context, setupAgent: Agent) => {
     const agentKey = scopeOf(agentCtx)
     if (!agentKey) {
       throw new Error(
@@ -94,7 +94,8 @@ export function composeAgentSetup(
       await coordinator.unbind(agentKey)
       throw error
     }
-    const callerCommit = await callerSetup?.(agentCtx)
+    // DSH passes the Agent explicitly; preserve it for setup consumers.
+    const callerCommit = await callerSetup?.(agentCtx, setupAgent)
     return {
       commit: () => {
         // The caller's publication commit runs first; the decorator then

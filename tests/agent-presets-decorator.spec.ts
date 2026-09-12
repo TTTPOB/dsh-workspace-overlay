@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Context, symbols } from '@deepseek-ai/cordis'
+import SessionProjections from '@deepseek-ai/dsh-session-projection'
 import {
   bindScopeParent,
   createScope,
@@ -9,13 +10,12 @@ import {
 } from '@deepseek-ai/dsh-scope'
 import {
   mountPreset,
-  PresetMountError,
   standingMountFor,
   AgentPresets,
   type AgentPreset,
   type Config as RosterConfig,
 } from '@deepseek-ai/dsh-agent-presets'
-import type { AgentRegistry, AgentSetup, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentRegistry, AgentSetup, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -89,7 +89,7 @@ class StubRegistry {
     agent.ctx = scope.ctx.extend({ agent })
     try {
       this.setupCalls += 1
-      const commit = await setup?.(agent.ctx)
+      const commit = await setup?.(agent.ctx, agent as unknown as Agent)
       commit?.commit()
     } catch (error) {
       await scope.dispose()
@@ -141,7 +141,9 @@ async function integrationHarness(): Promise<IntegrationHost> {
     default: 'standard',
     roots: [{ path: presetsRoot, trust: 'system' }],
     includeUserRoot: false,
+    includeShippedRoot: false,
   }
+  await host.ctx.plugin(SessionProjections)
   await host.ctx.plugin(AgentPresets, roster)
   const stub = new StubRegistry()
   host.ctx.provide('agents', stub as unknown as AgentRegistry)
@@ -249,7 +251,7 @@ describe('the agentPresets mount decorator', () => {
     await seedPreset(host.presetsRoot, 'ghost', '- id: x\n  name: [unclosed\n')
     const ws = await makeWorkspace(host.root, 'ws')
 
-    await expect(createAgent(ws, mountSetup(host, 'ghost'))).rejects.toBeInstanceOf(PresetMountError)
+    await expect(createAgent(ws, mountSetup(host, 'ghost'))).rejects.toMatchObject({ code: 'agent-preset/invalid' })
     expect(fixtureState().markers).toEqual([])
     expect(host.registry.size).toBe(0)
     expect(host.integration.coordinator.size).toBe(0)
@@ -259,7 +261,7 @@ describe('the agentPresets mount decorator', () => {
     await seedPreset(host.presetsRoot, 'broken', '- id: nope\n  name: ./plugins/does-not-exist.js\n')
     const ws = await makeWorkspace(host.root, 'ws')
 
-    await expect(createAgent(ws, mountSetup(host, 'broken'))).rejects.toBeInstanceOf(PresetMountError)
+    await expect(createAgent(ws, mountSetup(host, 'broken'))).rejects.toMatchObject({ code: 'agent-preset/invalid' })
     // The failed setup unwound the agent scope, releasing lease and join.
     expect(host.registry.size).toBe(0)
     expect(host.integration.coordinator.size).toBe(0)
@@ -436,7 +438,7 @@ describe('the recompose decorator', () => {
     const before = recordOf(created.agent).preset!
 
     await expect(host.ctx.agentPresets.recompose(created.agent.ctx, 'broken'))
-      .rejects.toBeInstanceOf(PresetMountError)
+      .rejects.toMatchObject({ code: 'agent-preset/invalid' })
     expect(recordOf(created.agent).preset).toBe(before)
     expect(scopeParentOf(created.agent as unknown as object)).toBe(before.key)
     expect(before.joined).toBe(1)

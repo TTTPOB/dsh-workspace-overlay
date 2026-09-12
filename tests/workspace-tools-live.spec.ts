@@ -140,9 +140,10 @@ describe('live workspace tools', () => {
       const names = await viewNames(lease.ctx, lease.key)
       expect(names).toContain('delta_tool')
       expect(names).not.toContain('gamma_tool')
+      // Registration can become visible before the reload pass settles.
+      expect(host.registry.get(lease.canonical)?.reload?.status).toBe('idle')
     }, { timeout: 5000 })
     expect(await viewNames(agent.ctx, agentKey)).toContain('delta_tool')
-    expect(host.registry.get(lease.canonical)?.reload?.status).toBe('idle')
 
     await lease.release()
     expect(scopeDisposed).toBe(true)
