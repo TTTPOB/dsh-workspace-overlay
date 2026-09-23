@@ -151,6 +151,7 @@ describe('module shape', () => {
       cwd: '',
       toolCallTimeoutMs: 60_000,
       failOnStartupError: false,
+      maxInstructionBytes: 32_768,
       reconnect: { enabled: true, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 },
     })
   })

@@ -25,6 +25,7 @@ describe('mcp Config schema', () => {
       cwd: '',
       toolCallTimeoutMs: 60_000,
       failOnStartupError: false,
+      maxInstructionBytes: 32_768,
       reconnect: RECONNECT_DEFAULTS,
     })
   })
@@ -42,6 +43,7 @@ describe('mcp Config schema', () => {
       headers: {},
       toolCallTimeoutMs: 60_000,
       failOnStartupError: false,
+      maxInstructionBytes: 32_768,
       reconnect: RECONNECT_DEFAULTS,
     })
   })
