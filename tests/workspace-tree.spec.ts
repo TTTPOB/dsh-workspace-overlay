@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import WorkspaceRegistry, { defaultConfig } from '../src/registry.js'
-import { WorkspaceMountError, mountWorkspaceTree } from '../src/workspace-tree.js'
+import { redactSourceExcerpt, WorkspaceMountError, mountWorkspaceTree } from '../src/workspace-tree.js'
 import {
   fixtureState,
   harness,
@@ -325,5 +325,59 @@ describe('a registry with no loader composition', () => {
     await vi.waitFor(() => {
       expect(bare.get('workspaceCordis')).toBeDefined()
     })
+  })
+})
+
+describe('redactSourceExcerpt', () => {
+  // The security invariant: a workspace composition holds secrets (a server URL
+  // carrying a bearer token, an env value), so the loader's embedded config
+  // body must never reach a log or a caller-visible message. These lock the
+  // shape the loader emits today so a future loader change that alters it fails
+  // loudly here rather than silently leaking.
+  const LOADER_PARSE_ERROR = [
+    'unexpected end of the stream within a flow collection (3:1)',
+    '',
+    '  1 | - id: x',
+    '  2 |   name: [unclosed',
+    '  3 |',
+    '  -----^ (/ws/.dsh/cordis.yml)',
+  ].join('\n')
+
+  it('strips a loader source excerpt and keeps the actionable position', () => {
+    const redacted = redactSourceExcerpt(LOADER_PARSE_ERROR)
+    expect(redacted).toContain('unexpected end of the stream within a flow collection (3:1)')
+    expect(redacted).not.toContain('unclosed')
+    expect(redacted).not.toContain('| - id:')
+    expect(redacted).toContain('[config source excerpt redacted]')
+  })
+
+  it('redacts a secret carried on an excerpt line', () => {
+    const secret = 'http://host:8086/private_c16c4131-28ad-46ff-a78a-9b973be5f74b'
+    const leaked = [
+      'bad mapping (2:3)',
+      '',
+      `  1 | - id: ws-ha-mcp`,
+      `  2 |   url: ${secret}`,
+      '  -----^ (/ws/.dsh/cordis.yml)',
+    ].join('\n')
+    expect(redactSourceExcerpt(leaked)).not.toContain('private_c16c4131')
+  })
+
+  it('leaves a plain single-line message untouched', () => {
+    expect(redactSourceExcerpt('row not found')).toBe('row not found')
+  })
+
+  it('leaves a multi-line message with no excerpt untouched', () => {
+    const message = 'loader entries failed to apply\n- row a rejected\n- row b rejected'
+    expect(redactSourceExcerpt(message)).toBe(message)
+  })
+
+  it('returns only the marker when the whole message was excerpt', () => {
+    expect(redactSourceExcerpt('  1 | secret\n  -----^ (/p)')).toBe('[config source excerpt redacted]')
+  })
+
+  it('is idempotent', () => {
+    const once = redactSourceExcerpt(LOADER_PARSE_ERROR)
+    expect(redactSourceExcerpt(once)).toBe(once)
   })
 })

@@ -148,22 +148,79 @@ export class WorkspaceTree extends Include {
 }
 
 /**
+ * A loader source-excerpt line: `  12 |   name: [unclosed`.
+ *
+ * `cordis-plugin-loader` 1.0.5 embeds the offending YAML body in parse
+ * errors, numbered and pipe-delimited. Workspace compositions hold secrets —
+ * a server URL carrying a bearer token, an env value — so the excerpt must
+ * never reach a log or a caller-visible message.
+ */
+const SOURCE_EXCERPT_LINE = /^\s*\d+\s*\|/
+
+/** The caret line under an excerpt: `  -----^ (/path/.dsh/cordis.yml)`. */
+const CARET_MARKER_LINE = /^\s*[-~]*\^/
+
+/**
+ * Strip loader source excerpts from an error message.
+ *
+ * A parse failure arrives as:
+ *
+ * ```text
+ * unexpected end of the stream within a flow collection (3:1)
+ *
+ *   1 | - id: x
+ *   2 |   name: [unclosed
+ *   3 |
+ *   -----^ (/path/.dsh/cordis.yml)
+ * ```
+ *
+ * The excerpt block is removed and a marker appended. The leading line keeps
+ * its `(line:col)` position, which is the actionable part: the operator knows
+ * which line broke without the file being dumped into the log.
+ * @param message - the raw error message.
+ * @returns the message with any source excerpt elided.
+ */
+export function redactSourceExcerpt(message: string): string {
+  if (!SOURCE_EXCERPT_LINE.test(message) && !message.includes('\n')) return message
+  const kept: string[] = []
+  let redacted = false
+  for (const line of message.split('\n')) {
+    if (SOURCE_EXCERPT_LINE.test(line) || CARET_MARKER_LINE.test(line)) {
+      redacted = true
+      continue
+    }
+    kept.push(line)
+  }
+  if (!redacted) return message
+  // Drop the blank lines the removed block left behind.
+  while (kept.length > 0 && kept[kept.length - 1]!.trim() === '') kept.pop()
+  const head = kept.join('\n').trimEnd()
+  return head.length === 0
+    ? '[config source excerpt redacted]'
+    : `${head} [config source excerpt redacted]`
+}
+
+/**
  * The reportable text of a mount failure.
  *
  * The loader reports several failed rows as one `AggregateError`, whose own
  * message names none of them; without flattening, a composition that fails on
  * two rows says only "loader entries failed to apply" and the operator has
- * nothing to act on.
+ * nothing to act on. Each cause is run through {@link redactSourceExcerpt}
+ * so the loader's embedded config body never travels with it.
  * @param error - the value the mount rejected with.
- * @returns a single-line-per-cause description.
+ * @returns a single-line-per-cause description, free of config text.
  */
 function mountDetail(error: unknown): string {
   /* v8 ignore next -- every path into the mount's catch throws an Error: the loader
      wraps a row's thrown value before it propagates, and this module's own
      rejections are Errors. The fallback keeps a hostile value readable. */
-  if (!(error instanceof Error)) return String(error)
-  if (!(error instanceof AggregateError)) return error.message
-  return [error.message, ...error.errors.map(cause => `- ${mountDetail(cause)}`)].join('\n')
+  if (!(error instanceof Error)) return redactSourceExcerpt(String(error))
+  if (!(error instanceof AggregateError)) return redactSourceExcerpt(error.message)
+  return [
+    redactSourceExcerpt(error.message),
+    ...error.errors.map(cause => `- ${mountDetail(cause)}`),
+  ].join('\n')
 }
 
 /**
@@ -205,7 +262,14 @@ export async function mountWorkspaceTree(
     const subtree = mounted.get(config)
     /* v8 ignore next -- the subclass constructor runs before `await()` settles for every mounted tree */
     if (subtree === undefined) throw new Error('mounted subtree did not publish its entry tree')
-    const unusable = inactiveRows(subtree.tree)
+    // 0.1.7: `inactiveRows(tree): string[]` became `auditRows(tree): Promise<RowAudit>`
+    // with `{ failed, pending }`. `failed` is import/activation rejection; `pending`
+    // is a row still waiting on a service the composition never supplies. The host
+    // subtree is already settled here (`handle.await()` above), so a row still
+    // pending has no provider coming — both classes are fatal, which is exactly what
+    // the old single-list `inactiveRows` reported.
+    const audit = await auditRows(subtree.tree)
+    const unusable = [...audit.failed, ...audit.pending]
     if (unusable.length > 0) {
       throw new Error(`${String(unusable.length)} row(s) did not activate:\n${unusable.join('\n')}`)
     }
