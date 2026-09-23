@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { Context, symbols } from '@deepseek-ai/cordis'
+import { Context, symbols, type Fiber } from '@deepseek-ai/cordis'
 import SessionProjections from '@deepseek-ai/dsh-session-projection'
 import {
   bindScopeParent,
@@ -8,29 +8,32 @@ import {
   scopeParentOf,
   type Scope,
 } from '@deepseek-ai/dsh-scope'
+// 0.1.7 renamed the package (`dsh-agent-presets` -> `dsh-agent-preset-registry`)
+// and the service class (`AgentPresets` -> `AgentPresetRegistry`); the Cordis
+// service name is still `agentPresets`. Two things this suite used to lean on are
+// gone: the file roster (`roots` + `seedPreset`), replaced by in-memory
+// `PresetDefinition`s handed to `registry.register()`, and `mountPreset`, which
+// is no longer re-exported from the package root — the registry's own live
+// standing mounts are read back with `livePresetMounts()` instead.
 import {
-  mountPreset,
+  AgentPresetRegistry,
+  livePresetMounts,
   standingMountFor,
-  AgentPresets,
-  type AgentPreset,
-  type Config as RosterConfig,
-} from '@deepseek-ai/dsh-agent-presets'
+  type PresetDefinition,
+} from '@deepseek-ai/dsh-agent-preset-registry'
 import type { Agent, AgentRegistry, AgentSetup, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   installAgentIntegration,
   type AgentIntegrationHandle,
 } from '../src/agent-integration.js'
 import {
+  FIXTURES,
   fixtureState,
   harness,
-  isolatedPreset,
   makeWorkspace,
-  markerPreset,
   resetFixtures,
-  seedPreset,
   teardown,
   type Harness,
 } from './helpers.js'
@@ -39,6 +42,33 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Published by the `isolated` fixture preset behind an entry-local realm. */
     presetIsolatedSvc: { label: string }
+  }
+}
+
+/**
+ * Absolute `file://` URL of one committed fixture plugin. With no roster root to
+ * resolve against, a preset row names its plugin the way a host plugin is named.
+ */
+const fixturePlugin = (file: string): string => pathToFileURL(join(FIXTURES, 'plugins', file)).href
+
+/** A one-row preset definition that seeds the given marker. */
+function markerDefinition(id: string, marker: string): PresetDefinition {
+  return {
+    id,
+    plugins: [{ id: 'marker', name: fixturePlugin('contribute.js'), config: { marker } }],
+  }
+}
+
+/** A one-row preset definition publishing one service behind an isolate realm. */
+function isolatedDefinition(id: string, service: string, label: string): PresetDefinition {
+  return {
+    id,
+    plugins: [{
+      id: 'svc',
+      name: fixturePlugin('global-service.js'),
+      isolate: { [service]: true },
+      config: { service, label },
+    }],
   }
 }
 
@@ -127,28 +157,43 @@ function callAsShadow<T>(target: object, method: string, receiver: object, args:
   return fn.call(receiver, ...args) as Promise<T>
 }
 
-/** A booted runtime with the real preset roster and the full integration. */
+/** A booted runtime with the real preset registry and the full integration. */
 interface IntegrationHost extends Harness {
-  presetsRoot: string
+  /** The official registry behind the `agentPresets` service name. */
+  presets: AgentPresetRegistry
+  /** The registry's own fiber, torn down last so its mounts go with it. */
+  presetFiber: Fiber
   stub: StubRegistry
   integration: AgentIntegrationHandle
 }
 
 async function integrationHarness(): Promise<IntegrationHost> {
   const host = await harness()
-  const presetsRoot = await mkdtemp(join(tmpdir(), 'dsh-ws-decorator-'))
-  const roster: RosterConfig = {
-    default: 'standard',
-    roots: [{ path: presetsRoot, trust: 'system' }],
-    includeUserRoot: false,
-    includeShippedRoot: false,
-  }
   await host.ctx.plugin(SessionProjections)
-  await host.ctx.plugin(AgentPresets, roster)
+  // The registry injects `loader` and `sessionProjections`, so it composes
+  // after both. Its config is a selection policy, not a file roster.
+  const presetFiber = await host.ctx.plugin(AgentPresetRegistry, { default: 'standard' })
+  const presets = host.ctx.get('agentPresets') as unknown as AgentPresetRegistry
   const stub = new StubRegistry()
   host.ctx.provide('agents', stub as unknown as AgentRegistry)
   const integration = installAgentIntegration(host.ctx)
-  return { ...host, presetsRoot, stub, integration }
+  return { ...host, presets, presetFiber, stub, integration }
+}
+
+/**
+ * Declare one preset on the live registry.
+ *
+ * `register()` eagerly activates the definition, which mounts the registry's own
+ * standing composition and runs the fixture row once. That activation is not
+ * what these tests observe — they observe the workspace-local generations the
+ * decorators compose — so the fixture log is cleared right after declaring.
+ *
+ * @returns The definition disposer, for tests that need a revision change.
+ */
+async function declarePreset(definition: PresetDefinition): Promise<() => Promise<void>> {
+  const off = await host.presets.register(definition)
+  resetFixtures()
+  return off
 }
 
 /** The setup the official Web factory uses: mount one preset in setup. */
@@ -166,7 +211,10 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await rm(host.presetsRoot, { recursive: true, force: true })
+  // The live-mount set is module state spanning every Cordis runtime in the
+  // process, so the registry fiber goes down before the harness temp root is
+  // removed; otherwise a later test's `revisionOf()` reads a stale mount.
+  await host.presetFiber.dispose()
   await teardown(host)
 })
 
@@ -185,8 +233,8 @@ describe('the agentPresets mount decorator', () => {
     return record
   }
 
-  it('composes a workspace-local generation and the official readers hit it', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('standard'))
+  it('composes a workspace-local generation under the agent\'s workspace', async () => {
+    await declarePreset(markerDefinition('standard', 'standard'))
     const ws = await makeWorkspace(host.root, 'ws')
 
     const created = await createAgent(ws, mountSetup(host, 'standard'))
@@ -196,11 +244,6 @@ describe('the agentPresets mount decorator', () => {
     // The agent's direct parent is the generation key, under the workspace.
     expect(scopeParentOf(created.agent as unknown as object)).toBe(record.preset!.key)
     expect(scopeParentOf(record.preset!.key)).toBe(record.lease.key)
-    // Official readers resolve the generation through the standing registry.
-    const standing = standingMountFor(created.agent.ctx)
-    expect(standing?.presetId).toBe('standard')
-    expect(standing?.key).toBe(record.preset!.key)
-    expect(host.ctx.agentPresets.composedPreset(created.agent.ctx)).toBe('standard')
     // The preset row's registrations landed in the generation scope.
     expect(fixtureState().markers).toEqual(['standard'])
     expect(scopeOf(fixtureState().contexts[0]!)).toBe(record.preset!.key)
@@ -208,7 +251,7 @@ describe('the agentPresets mount decorator', () => {
   })
 
   it('shares one generation between two agents of the same workspace and preset', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('standard'))
+    await declarePreset(markerDefinition('standard', 'standard'))
     const ws = await makeWorkspace(host.root, 'ws')
 
     const first = await createAgent(ws, mountSetup(host, 'standard'))
@@ -224,7 +267,7 @@ describe('the agentPresets mount decorator', () => {
   })
 
   it('keeps generations isolated across workspaces', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('standard'))
+    await declarePreset(markerDefinition('standard', 'standard'))
     const wsA = await makeWorkspace(host.root, 'a')
     const wsB = await makeWorkspace(host.root, 'b')
 
@@ -237,7 +280,7 @@ describe('the agentPresets mount decorator', () => {
   })
 
   it('rejects a mount on an agent with no workspace binding', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('standard'))
+    await declarePreset(markerDefinition('standard', 'standard'))
     const scope = createScope(host.ctx, {})
 
     await expect(host.ctx.agentPresets.mount(scope.ctx, 'standard'))
@@ -246,9 +289,13 @@ describe('the agentPresets mount decorator', () => {
     await scope.dispose()
   })
 
-  it('rejects a discovery-broken preset before any mount attempt', async () => {
-    // Unparsable composition: discovery reports the preset broken.
-    await seedPreset(host.presetsRoot, 'ghost', '- id: x\n  name: [unclosed\n')
+  it('rejects a preset whose plugin cannot be imported before any mount attempt', async () => {
+    // The row names a file that does not exist: activation fails and the
+    // registry reports the definition broken.
+    await declarePreset({
+      id: 'ghost',
+      plugins: [{ id: 'nope', name: fixturePlugin('does-not-exist.js') }],
+    })
     const ws = await makeWorkspace(host.root, 'ws')
 
     await expect(createAgent(ws, mountSetup(host, 'ghost'))).rejects.toMatchObject({ code: 'agent-preset/invalid' })
@@ -257,28 +304,59 @@ describe('the agentPresets mount decorator', () => {
     expect(host.integration.coordinator.size).toBe(0)
   })
 
-  it('rejects an unusable mount and leaves the agent unpublished', async () => {
-    await seedPreset(host.presetsRoot, 'broken', '- id: nope\n  name: ./plugins/does-not-exist.js\n')
+  it('rejects a preset whose row never reaches a usable state', async () => {
+    // The row activates but waits forever for a service the composition never
+    // supplies. 0.1.7 reports that through the row audit rather than an import
+    // failure, so it is a distinct case from the missing file above.
+    await declarePreset({
+      id: 'stuck',
+      plugins: [{ id: 'nm', name: fixturePlugin('needs-missing.js') }],
+    })
     const ws = await makeWorkspace(host.root, 'ws')
 
-    await expect(createAgent(ws, mountSetup(host, 'broken'))).rejects.toMatchObject({ code: 'agent-preset/invalid' })
+    await expect(createAgent(ws, mountSetup(host, 'stuck'))).rejects.toMatchObject({ code: 'agent-preset/invalid' })
     // The failed setup unwound the agent scope, releasing lease and join.
     expect(host.registry.size).toBe(0)
     expect(host.integration.coordinator.size).toBe(0)
   })
 
-  it('answers official serviceFor with the workspace-local generation', async () => {
-    await seedPreset(host.presetsRoot, 'isolated', isolatedPreset('presetIsolatedSvc', 'ISOLATED'))
+  it('keeps the workspace-local generation out of the official standing-mount readers', async () => {
+    // 0.1.7 keeps the standing-mount set module-private and exposes no way to
+    // join it, so the overlay's per-workspace subtree is invisible to
+    // `standingMountFor()` / `composedPreset()` / `serviceFor()` — the gap
+    // documented at the top of src/workspace-presets.ts. The agent's exact
+    // generation stays readable through the coordinator record instead.
+    await declarePreset(isolatedDefinition('isolated', 'presetIsolatedSvc', 'ISOLATED'))
     const ws = await makeWorkspace(host.root, 'ws')
 
     const isolated = await createAgent(ws, mountSetup(host, 'isolated'))
-    expect(host.ctx.agentPresets.serviceFor(isolated.agent, 'presetIsolatedSvc'))
+
+    expect(standingMountFor(isolated.agent.ctx)).toBeUndefined()
+    expect(host.ctx.agentPresets.composedPreset(isolated.agent.ctx)).toBeUndefined()
+    expect(host.ctx.agentPresets.serviceFor(isolated.agent, 'presetIsolatedSvc')).toBeUndefined()
+    // The generation itself is real: mounted, joined, and reachable by record.
+    const record = recordOf(isolated.agent)
+    expect(record.preset?.presetId).toBe('isolated')
+    expect(record.preset?.joined).toBe(1)
+    expect(scopeParentOf(isolated.agent as unknown as object)).toBe(record.preset!.key)
+  })
+
+  it('answers official serviceFor through the registry standing mount', async () => {
+    // Positive control for the gap above: the reader itself works. An agent
+    // joined to the registry's OWN standing mount resolves the isolated
+    // service the preset published behind an isolate realm.
+    await declarePreset(isolatedDefinition('isolated', 'presetIsolatedSvc', 'ISOLATED'))
+    const standing = livePresetMounts().find(mount => mount.presetId === 'isolated')!
+
+    const joinedKey = {}
+    const joined = createScope(host.ctx, joinedKey)
+    bindScopeParent(joinedKey, standing.key!)
+
+    expect(standingMountFor(joined.ctx)?.key).toBe(standing.key)
+    expect(host.ctx.agentPresets.serviceFor({ ctx: joined.ctx }, 'presetIsolatedSvc'))
       .toEqual({ label: 'ISOLATED' })
 
-    // Another agent on a different preset cannot reach into this generation.
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('standard'))
-    const standard = await createAgent(ws, mountSetup(host, 'standard'))
-    expect(host.ctx.agentPresets.serviceFor(standard.agent, 'presetIsolatedSvc')).toBeUndefined()
+    await joined.dispose()
   })
 })
 
@@ -297,7 +375,7 @@ describe('the composeFrom decorator', () => {
   }
 
   it('inherits the parent\'s EXACT generation, synchronously, without I/O', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('standard'))
+    await declarePreset(markerDefinition('standard', 'standard'))
     const ws = await makeWorkspace(host.root, 'ws')
     const parent = await createAgent(ws, mountSetup(host, 'standard'))
     const parentGen = recordOf(parent.agent).preset!
@@ -330,7 +408,7 @@ describe('the composeFrom decorator', () => {
   })
 
   it('rejects a child with no workspace binding', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('standard'))
+    await declarePreset(markerDefinition('standard', 'standard'))
     const ws = await makeWorkspace(host.root, 'ws')
     const parent = await createAgent(ws, mountSetup(host, 'standard'))
     const scope = createScope(host.ctx, {})
@@ -342,7 +420,7 @@ describe('the composeFrom decorator', () => {
   })
 
   it('rejects a cross-workspace inheritance and rolls the child back', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('standard'))
+    await declarePreset(markerDefinition('standard', 'standard'))
     const wsA = await makeWorkspace(host.root, 'a')
     const wsB = await makeWorkspace(host.root, 'b')
     const parent = await createAgent(wsA, mountSetup(host, 'standard'))
@@ -358,23 +436,18 @@ describe('the composeFrom decorator', () => {
   })
 
   it('rejects a parent composed outside this workspace binding', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('standard'))
+    await declarePreset(markerDefinition('standard', 'standard'))
     const ws = await makeWorkspace(host.root, 'ws')
-    // A foreign parent: minted outside the decorated registry, mounted through
-    // the official mountPreset into its own standing scope, and parented to it
-    // — so an official standing mount exists but no coordinator record does.
-    const preset: AgentPreset = {
-      id: 'standard',
-      trust: 'system',
-      path: join(host.presetsRoot, 'standard', 'agent.cordis.yml'),
-    }
-    const standingKey = {}
-    const standingScope = createScope(host.ctx, standingKey)
-    await mountPreset(standingScope.ctx, preset)
+    // A foreign parent: minted outside the decorated registry and parented to
+    // the registry's own standing mount, so an official standing mount exists
+    // but no coordinator record does. 0.1.7 no longer exports `mountPreset`,
+    // so the standing mount is read back from the live registry rather than
+    // built by hand.
+    const standing = livePresetMounts().find(mount => mount.presetId === 'standard')!
     const foreignKey = {}
     const foreignScope = createScope(host.ctx, foreignKey)
-    bindScopeParent(foreignKey, standingKey)
-    expect(standingMountFor(foreignScope.ctx)?.key).toBe(standingKey)
+    bindScopeParent(foreignKey, standing.key!)
+    expect(standingMountFor(foreignScope.ctx)?.key).toBe(standing.key)
 
     let error: unknown
     await createAgent(ws, (childCtx: Context): void => {
@@ -387,7 +460,6 @@ describe('the composeFrom decorator', () => {
     expect(String(error)).toMatch(/outside this workspace binding/)
 
     await foreignScope.dispose()
-    await standingScope.dispose()
   })
 })
 
@@ -406,8 +478,8 @@ describe('the recompose decorator', () => {
   }
 
   it('switches generations with balanced joined counts and reuses same-stamp generations', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('std'))
-    await seedPreset(host.presetsRoot, 'minimal', markerPreset('min'))
+    await declarePreset(markerDefinition('standard', 'std'))
+    await declarePreset(markerDefinition('minimal', 'min'))
     const ws = await makeWorkspace(host.root, 'ws')
     const created = await createAgent(ws, mountSetup(host, 'standard'))
     const stdGen = recordOf(created.agent).preset!
@@ -431,8 +503,11 @@ describe('the recompose decorator', () => {
   })
 
   it('rejects an unknown or broken preset and leaves the agent unchanged', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('std'))
-    await seedPreset(host.presetsRoot, 'broken', '- id: nope\n  name: ./plugins/does-not-exist.js\n')
+    await declarePreset(markerDefinition('standard', 'std'))
+    await declarePreset({
+      id: 'broken',
+      plugins: [{ id: 'nm', name: fixturePlugin('needs-missing.js') }],
+    })
     const ws = await makeWorkspace(host.root, 'ws')
     const created = await createAgent(ws, mountSetup(host, 'standard'))
     const before = recordOf(created.agent).preset!
@@ -443,13 +518,17 @@ describe('the recompose decorator', () => {
     expect(scopeParentOf(created.agent as unknown as object)).toBe(before.key)
     expect(before.joined).toBe(1)
 
+    // 0.1.7 reports an unknown id as a typed not-found rather than the old
+    // free-form "not found" text.
     await expect(host.ctx.agentPresets.recompose(created.agent.ctx, 'missing-id'))
-      .rejects.toThrow(/not found/)
+      .rejects.toMatchObject({ code: 'agent-preset/not-found' })
+    await expect(host.ctx.agentPresets.recompose(created.agent.ctx, 'missing-id'))
+      .rejects.toThrow(/Unknown agent preset/)
     expect(recordOf(created.agent).preset).toBe(before)
   })
 
   it('disposes the superseded generation once its last agent leaves it', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('v1'))
+    const offV1 = await declarePreset(markerDefinition('standard', 'v1'))
     const ws = await makeWorkspace(host.root, 'ws')
     const first = await createAgent(ws, mountSetup(host, 'standard'))
     const oldGen = recordOf(first.agent).preset!
@@ -457,10 +536,12 @@ describe('the recompose decorator', () => {
     expect(recordOf(second.agent).preset).toBe(oldGen)
     expect(oldGen.joined).toBe(2)
 
-    // A visible file change starts a new generation; the old one is superseded
-    // and still joined by the second agent, so it must not be disposed yet.
-    const path = join(host.presetsRoot, 'standard', 'agent.cordis.yml')
-    await writeFile(path, markerPreset('v2-longer-marker'))
+    // 0.1.7's revision identity is the registry's live standing-mount key, so
+    // re-registering the definition is the "the composition changed" signal
+    // the file's stat stamp used to be: the next ensure() starts a fresh
+    // generation while the old one stays joined by the second agent.
+    await offV1()
+    const offV2 = await declarePreset(markerDefinition('standard', 'v2-longer-marker'))
     const fresh = await host.ctx.agentPresets.recompose(first.agent.ctx, 'standard')
     expect(fresh.id).toBe('standard')
     const newGen = recordOf(first.agent).preset!
@@ -475,6 +556,8 @@ describe('the recompose decorator', () => {
     await new Promise(resolve => setTimeout(resolve, 10))
     expect(oldGen.joined).toBe(0)
     expect(oldGen.disposed).toBe(true)
+
+    await offV2()
   })
 })
 
@@ -487,7 +570,7 @@ describe('agent teardown through the integration', () => {
   }
 
   it('releases the join and the workspace lease on agent disposal', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('standard'))
+    await declarePreset(markerDefinition('standard', 'standard'))
     const ws = await makeWorkspace(host.root, 'ws')
     const created = await createAgent(ws, mountSetup(host, 'standard'))
     const gen = host.integration.coordinator.recordFor(created.agent as unknown as object)!.preset!
@@ -502,7 +585,7 @@ describe('agent teardown through the integration', () => {
   })
 
   it('dispose restores all five wrapped methods in reverse order', async () => {
-    await seedPreset(host.presetsRoot, 'standard', markerPreset('standard'))
+    await declarePreset(markerDefinition('standard', 'standard'))
     const ws = await makeWorkspace(host.root, 'ws')
     const created = await createAgent(ws, mountSetup(host, 'standard'))
     const rawPresets = (host.ctx.agentPresets as unknown as { [symbols.original]?: unknown })[symbols.original]

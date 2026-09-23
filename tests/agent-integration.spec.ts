@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { AgentRegistry, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
-import type { AgentPresets } from '@deepseek-ai/dsh-agent-presets'
+import type { AgentPresetRegistry as AgentPresets } from '@deepseek-ai/dsh-agent-preset-registry'
 import { installAgentIntegration } from '../src/agent-integration.js'
 import { harness, teardown, type Harness } from './helpers.js'
 

@@ -8,38 +8,143 @@
  * single-flights concurrent `ensure()` calls so two agents racing the first
  * use of one preset in a workspace share one composition.
  *
- * A generation is keyed by the preset composition file's stat stamp
- * (`mtimeMs` + `size`): the same stamp reuses the current generation, a
- * changed stamp starts a fresh generation whose scope key is a new object.
- * Agents already joined keep the generation they run on; a superseded
- * generation is disposed once its joined count reaches zero, while the
- * current generation lives until the workspace scope's final dispose collects
- * it (generation scopes are children of the workspace scope, so disposal
- * happens automatically).
+ * A generation is keyed by the preset's live revision identity: the same
+ * revision reuses the current generation, a new revision starts a fresh
+ * generation whose scope key is a new object. Agents already joined keep the
+ * generation they run on; a superseded generation is disposed once its joined
+ * count reaches zero, while the current generation lives until the workspace
+ * scope's final dispose collects it (generation scopes are children of the
+ * workspace scope, so disposal happens automatically).
  *
  * State is held in a WeakMap keyed by the workspace scope key (`lease.key`),
  * so it never keeps a disposed workspace alive: when the workspace entry is
  * dropped, the key becomes unreachable and the whole per-workspace map —
  * generations included — is collectable.
  *
- * Mounting goes through the official `mountPreset()`, which registers the
- * generation scope key in the official standing-mount registry; the agent's
- * direct scope parent is therefore that generation key, which is exactly what
- * the official `standingMountFor()` / `composedPreset()` / `serviceFor()`
- * readers match on.
+ * ## DSH 0.1.7 migration notes
+ *
+ * The old code called the official `mountPreset(ctx, preset)`, which read the
+ * composition from `preset.path`. 0.1.7 removed both:
+ *
+ *   * `mountPreset` is no longer re-exported from the package root (only
+ *     `auditRows`, `leakedServices`, `livePresetMounts`, `serviceForAgent`
+ *     and `standingMountFor` are), and
+ *   * the public `AgentPreset` roster row no longer carries `path` — a preset
+ *     is now an in-memory `PresetDefinition` whose `plugins` entry list is
+ *     supplied by the declaring `@deepseek-ai/dsh-agent-preset` row.
+ *
+ * So this module mounts the definition itself, with a small in-memory
+ * `EntryTree` subclass that mirrors what the official `PresetTree` does, and
+ * reads the definition out of the registry's own declaration map. The
+ * revision identity is the official standing mount's scope key, which 0.1.7
+ * replaces whenever a definition is re-registered — the same "changed
+ * composition means a new generation" signal the file's stat stamp used to
+ * give.
+ *
+ * One deliberate gap: our subtree is not added to the registry's module-private
+ * `mounts` set (there is no public way to), so `standingMountFor()` /
+ * `serviceForAgent()` do not resolve workspace-local preset generations.
+ * The only in-tree consumer of those in 0.1.7 is
+ * `@deepseek-ai/dsh-plugin-package-inventory-deepseek`, which uses them to
+ * list active plugin packages for a session; workspace preset entries are
+ * therefore absent from that inventory. Nothing on the agent execution path
+ * reads them.
  *
  * @module dsh-workspace-overlay/workspace-presets
  */
-import { mountPreset, type AgentPreset } from '@deepseek-ai/dsh-agent-presets'
+import {
+  auditRows,
+  leakedServices,
+  livePresetMounts,
+  type AgentPreset,
+  type AgentPresetRegistry,
+} from '@deepseek-ai/dsh-agent-preset-registry'
+import type { Context } from '@deepseek-ai/cordis'
+import { EntryTree, type EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
-import { createScope, type Scope, type ScopeKey } from '@deepseek-ai/dsh-scope'
-import { stat } from 'node:fs/promises'
+import { createScope, scopeOf, type Scope, type ScopeKey } from '@deepseek-ai/dsh-scope'
 import type { WorkspaceLease } from './registry.js'
 
-/** One composition file's stat stamp: the generation's identity within a workspace. */
+/**
+ * The live revision identity of one preset: the scope key of its official
+ * standing mount. Compared by reference — a re-registered definition gets a
+ * new key, which is exactly the "the composition changed" signal.
+ */
 export interface CompositionStamp {
-  readonly mtimeMs: number
-  readonly size: number
+  readonly revision: ScopeKey
+}
+
+/**
+ * In-memory loader tree for one preset composition.
+ *
+ * Mirrors the official `PresetTree`: an `EntryTree` whose `write()` is a
+ * no-op, because a workspace-local preset generation is an input the overlay
+ * never persists.
+ */
+class PresetListTree extends EntryTree {
+  write(): void {}
+}
+
+/**
+ * Mount one preset definition under `ctx` and return only once every row is
+ * usable. Equivalent to the 0.1.5 official `mountPreset(ctx, preset)`, less
+ * the private `mounts` registration that has no public entry point in 0.1.7.
+ *
+ * The subtree is owned by `ctx`'s fiber, so it unwinds with the scope that
+ * contains it; the caller receives no separate disposer.
+ * @param ctx - the generation scope's context.
+ * @param id - preset identity, for diagnostics.
+ * @param plugins - the definition's Cordis entry list.
+ * @throws when `ctx` carries no scope, a row failed, or a row leaked a
+ * service into the root realm.
+ */
+async function mountPresetEntries(
+  ctx: Context,
+  id: string,
+  plugins: readonly EntryOptions[],
+): Promise<void> {
+  if (scopeOf(ctx) === undefined) {
+    throw new Error(`agent-presets: mounting preset "${id}" requires a scoped context`)
+  }
+  await ctx.fiber.await()
+  const tree = new PresetListTree(ctx)
+  ctx.effect(() => () => {
+    tree.root.stop()
+  }, `agent-preset.${id}.tree`)
+  await tree.root.update(structuredClone(plugins) as EntryOptions[])
+  const audit = await auditRows(tree)
+  if (audit.failed.length > 0) {
+    throw new Error(`preset "${id}" failed to mount:\n${audit.failed.join('\n')}`)
+  }
+  const leaked = leakedServices(ctx, ctx.fiber)
+  if (leaked.length > 0) {
+    throw new Error(
+      `preset "${id}" published non-isolated service(s) [${leaked.join(', ')}]; `
+      + 'preset services require isolate realms',
+    )
+  }
+}
+
+/**
+ * Read one preset's declared entry list out of the registry.
+ *
+ * `AgentPresetRegistry` keeps its declarations in a private `definitions`
+ * map of `{ config: PresetDefinition, ... }`. 0.1.7 exposes no public
+ * accessor for a definition's `plugins`, and the roster row dropped `path`,
+ * so this is the only way to obtain the composition to re-mount per
+ * workspace. Read defensively: a shape change returns `undefined` and the
+ * caller surfaces an actionable error rather than mounting nothing.
+ */
+function pluginsOf(registry: AgentPresetRegistry, id: string): readonly EntryOptions[] | undefined {
+  const holder = registry as unknown as {
+    definitions?: Map<string, { config?: { plugins?: readonly EntryOptions[] } }>
+  }
+  return holder.definitions?.get(id)?.config?.plugins
+}
+
+/** The official standing mount key for `id`, used as its revision identity. */
+function revisionOf(id: string): ScopeKey | undefined {
+  return livePresetMounts().find(mount => mount.presetId === id)?.key
 }
 
 /**
@@ -51,7 +156,7 @@ export interface PresetGeneration {
   readonly key: ScopeKey
   /** The preset this generation was composed from. */
   readonly presetId: string
-  /** The composition file stamp the generation was mounted under. */
+  /** The preset revision the generation was mounted under. */
   readonly stamp: CompositionStamp
   /** The generation's scope; disposed with the workspace scope at the latest. */
   readonly scope: Scope
@@ -67,19 +172,9 @@ export interface PresetGeneration {
   supersede(): void
 }
 
-/** Whether two stamps name the same file state. */
+/** Whether two stamps name the same preset revision. */
 function sameStamp(a: CompositionStamp, b: CompositionStamp): boolean {
-  return a.mtimeMs === b.mtimeMs && a.size === b.size
-}
-
-/** Read one composition file's stamp, or undefined when it cannot be statted. */
-async function compositionStamp(path: string): Promise<CompositionStamp | undefined> {
-  try {
-    const { mtimeMs, size } = await stat(path)
-    return { mtimeMs, size }
-  } catch {
-    return undefined
-  }
+  return a.revision === b.revision
 }
 
 class GenerationImpl implements PresetGeneration {
@@ -139,7 +234,7 @@ class GenerationImpl implements PresetGeneration {
 
 /** Per-workspace preset state; dies with the workspace scope key. */
 interface WorkspacePresetState {
-  /** Current generation per preset id; replaced (and superseded) on stamp change. */
+  /** Current generation per preset id; replaced (and superseded) on revision change. */
   current: Map<string, PresetGeneration>
   /** Single-flight creation per preset id. */
   inflight: Map<string, Promise<PresetGeneration>>
@@ -158,39 +253,45 @@ export class WorkspacePresetRegistry {
 
   /**
    * Ensure the current generation of `preset` in the lease's workspace,
-   * mounting it under a fresh child scope when the stamp changed or none
+   * mounting it under a fresh child scope when the revision changed or none
    * exists. Concurrent calls for the same preset share one mount; a settled
-   * failure is not cached, so a later call retries the fixed file.
+   * failure is not cached, so a later call retries.
    *
    * The returned generation has no join yet: the caller joins it when it
    * actually binds an agent to it.
    * @param lease - the workspace lease the generation is scoped to.
    * @param preset - the resolved preset to compose.
-   * @throws `RemoteError` when the composition is unreadable or unusable.
+   * @param registry - the live preset registry, read for the definition.
+   * @throws `RemoteError` when the definition is unavailable or unusable.
    */
-  async ensure(lease: WorkspaceLease, preset: AgentPreset): Promise<PresetGeneration> {
+  async ensure(
+    lease: WorkspaceLease,
+    preset: AgentPreset,
+    registry: AgentPresetRegistry,
+  ): Promise<PresetGeneration> {
     const state = this.stateFor(lease.key)
     for (;;) {
-      const stamp = await compositionStamp(preset.path)
-      if (stamp === undefined) {
-        const reason = `composition file is unreadable: ${preset.path}`
-        throw new RemoteError('agent-preset/invalid', `agent-presets: preset "${preset.id}" failed to mount: ${reason}`, {
+      const revision = revisionOf(preset.id)
+      if (revision === undefined) {
+        const reason = `preset has no live standing mount: ${preset.id}`
+        throw new RemoteError('agent-preset/invalid', reason, {
           agentPreset: preset.id,
           reason,
         })
       }
+      const stamp: CompositionStamp = { revision }
       const current = state.current.get(preset.id)
       if (current !== undefined && sameStamp(current.stamp, stamp)) return current
       const inflight = state.inflight.get(preset.id)
       if (inflight !== undefined) {
         const generation = await inflight
         if (sameStamp(generation.stamp, stamp)) return generation
-        // The file changed while the shared mount was in flight: drop the
-        // settled result and create a fresh generation for the new stamp.
+        // The revision changed while the shared mount was in flight: drop the
+        // settled result and create a fresh generation for the new revision.
         if (state.inflight.get(preset.id) === inflight) state.inflight.delete(preset.id)
         continue
       }
-      const created = this.createGeneration(lease, preset, stamp)
+      const created = this.createGeneration(lease, preset, stamp, registry)
       state.inflight.set(preset.id, created)
       void created
         .then(
@@ -211,7 +312,7 @@ export class WorkspacePresetRegistry {
         })
       const generation = await created
       if (sameStamp(generation.stamp, stamp)) return generation
-      // The file changed again while mounting; the loop re-checks the stamp.
+      // The revision changed again while mounting; the loop re-checks.
     }
   }
 
@@ -228,20 +329,38 @@ export class WorkspacePresetRegistry {
    * Mount one preset generation under a fresh scope child of the workspace
    * scope. The key is always a new object — a generation's identity must
    * never alias another scope's. A mount failure disposes the fresh scope and
-   * propagates the official `RemoteError`.
+   * propagates the error.
    */
   private async createGeneration(
     lease: WorkspaceLease,
     preset: AgentPreset,
     stamp: CompositionStamp,
+    registry: AgentPresetRegistry,
   ): Promise<PresetGeneration> {
+    const plugins = pluginsOf(registry, preset.id)
+    if (plugins === undefined) {
+      const reason = `preset definition is not readable from the registry: ${preset.id}`
+      throw new RemoteError('agent-preset/invalid', reason, {
+        agentPreset: preset.id,
+        reason,
+      })
+    }
     const key: ScopeKey = {}
     const scope = createScope(lease.ctx, key, { parent: lease.key })
     try {
-      await mountPreset(scope.ctx, preset)
+      await mountPresetEntries(scope.ctx, preset.id, plugins)
     } catch (error) {
       await scope.dispose()
-      throw error
+      // Match the official contract: `AgentPresetRegistry.retain()` reports a
+      // preset whose composition will not mount as `agent-preset/invalid` with
+      // the diagnostic carried in `reason` (see `retain` + `diagnostic` in
+      // 0.1.7). A plain Error here would reach remote clients as an opaque
+      // failure instead of "this preset is broken, because …".
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new RemoteError('agent-preset/invalid', reason, {
+        agentPreset: preset.id,
+        reason,
+      })
     }
     return new GenerationImpl(key, preset.id, stamp, scope)
   }

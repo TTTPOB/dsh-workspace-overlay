@@ -18,7 +18,7 @@
 import { Context, type Fiber } from '@deepseek-ai/cordis'
 import { Include } from '@deepseek-ai/cordis-plugin-include'
 import type { EntryTree } from '@deepseek-ai/cordis-plugin-loader'
-import { inactiveRows, leakedServices } from '@deepseek-ai/dsh-agent-presets'
+import { auditRows, leakedServices } from '@deepseek-ai/dsh-agent-preset-registry'
 import { scopeOf } from '@deepseek-ai/dsh-scope'
 import { isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'

@@ -7,7 +7,7 @@ import AgentRegistry, {
   type CreateAgentOptions,
   type ResumeAgentOptions,
 } from '@deepseek-ai/dsh-agent'
-import type { AgentPresets } from '@deepseek-ai/dsh-agent-presets'
+import type { AgentPresetRegistry as AgentPresets } from '@deepseek-ai/dsh-agent-preset-registry'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { installAgentIntegration } from '../src/agent-integration.js'
 import { harness, makeWorkspace, teardown, type Harness } from './helpers.js'

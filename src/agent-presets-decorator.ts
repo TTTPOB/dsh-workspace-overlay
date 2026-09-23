@@ -40,8 +40,10 @@ import { symbols, type Context } from '@deepseek-ai/cordis'
 import {
   standingMountFor,
   type AgentPreset,
-  type AgentPresets,
-} from '@deepseek-ai/dsh-agent-presets'
+  // 0.1.7: `AgentPresets` is now `AgentPresetRegistry`; aliased so the
+  // decorator bodies, which reference the old name throughout, stay unchanged.
+  type AgentPresetRegistry as AgentPresets,
+} from '@deepseek-ai/dsh-agent-preset-registry'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { scopeOf, type ScopeKey } from '@deepseek-ai/dsh-scope'
 import type { AgentBindingCoordinator } from './coordinator.js'
@@ -100,7 +102,7 @@ function wrapMount(coordinator: AgentBindingCoordinator, presets: WorkspacePrese
       )
     }
     const preset = await resolveMountable(thisArg, id)
-    const generation = await presets.ensure(record.lease, preset)
+    const generation = await presets.ensure(record.lease, preset, thisArg)
     coordinator.switchPreset(agentKey, generation)
     return preset
   }
@@ -132,7 +134,7 @@ function wrapRecompose(coordinator: AgentBindingCoordinator, presets: WorkspaceP
       )
     }
     const preset = await resolveMountable(thisArg, id)
-    const generation = await presets.ensure(record.lease, preset)
+    const generation = await presets.ensure(record.lease, preset, thisArg)
     coordinator.switchPreset(agentKey, generation)
     return preset
   }

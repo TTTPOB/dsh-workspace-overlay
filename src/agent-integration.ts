@@ -15,7 +15,11 @@
  */
 import { type Context } from '@deepseek-ai/cordis'
 import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
-import type { AgentPresets } from '@deepseek-ai/dsh-agent-presets'
+// DSH 0.1.7 renamed `dsh-agent-presets` -> `dsh-agent-preset-registry` and the
+// service class `AgentPresets` -> `AgentPresetRegistry`. The Cordis service name
+// (`agentPresets`) and every wrapped method signature are unchanged, so aliasing
+// keeps the rest of this module untouched.
+import type { AgentPresetRegistry as AgentPresets } from '@deepseek-ai/dsh-agent-preset-registry'
 import { installAgentRegistryDecorators } from './agent-registry-decorator.js'
 import { installAgentPresetsDecorators } from './agent-presets-decorator.js'
 import { AgentBindingCoordinator } from './coordinator.js'
