@@ -30,10 +30,19 @@ for (const target of [packed.main, packed.dsh.bundle.patch, ...Object.values(pac
 const digest = createHash('sha256').update(readFileSync(tarball)).digest('hex')
 writeFileSync(join(destination, 'SHA256SUMS'), `${digest}  ${filename}\n`)
 const repository = pkg.repository.url.replace(/^git\+/, '').replace(/\.git$/, '')
+// Derive the validated-against versions from the declared peers so release notes
+// cannot drift from what package.json actually requires (they previously named
+// 0.1.5-rc.2 / Cordis 4.0.2 long after the peers moved).
+const peerCordis = pkg.peerDependencies?.['@deepseek-ai/cordis'] ?? 'unknown'
+const peerDsh = Object.entries(pkg.peerDependencies ?? {})
+  .filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
+  .map(([name, version]) => `${name.slice('@deepseek-ai/'.length)} ${version}`)
+  .join(', ')
+
 writeFileSync(join(destination, 'release-notes.md'), [
   `Prebuilt ${pkg.name} ${pkg.version}.`,
   '',
-  'Validated against DSH service packages 0.1.5-rc.2 and Cordis 4.0.2. Shared DSH/Cordis peers must resolve to the Host module instances.',
+  `Validated against DSH service packages ${peerDsh} and Cordis ${peerCordis}. Shared DSH/Cordis peers must resolve to the Host module instances.`,
   '',
   'Install with the installed DSH CLI (install overlay before envrc):',
   '',
