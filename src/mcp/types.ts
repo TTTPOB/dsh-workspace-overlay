@@ -35,6 +35,13 @@ export interface StdioConfig {
   toolCallTimeoutMs: number
   /** Fail plugin activation when the initial connection or tool synchronization fails. */
   failOnStartupError: boolean
+  /**
+   * Ceiling on the server's advertised `instructions` text, in UTF-8 bytes; a
+   * server exceeding it is rejected at startup. Optional on the type but
+   * always materialized by the schema to `DEFAULT_MAX_INSTRUCTION_BYTES`
+   * (32 KiB) — the same optionality the 0.1.7 official `Config` uses.
+   */
+  maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
   reconnect?: ReconnectConfig
 }
@@ -57,6 +64,13 @@ export interface StreamableHttpConfig {
   toolCallTimeoutMs: number
   /** Fail plugin activation when the initial connection or tool synchronization fails. */
   failOnStartupError: boolean
+  /**
+   * Ceiling on the server's advertised `instructions` text, in UTF-8 bytes; a
+   * server exceeding it is rejected at startup. Optional on the type but
+   * always materialized by the schema to `DEFAULT_MAX_INSTRUCTION_BYTES`
+   * (32 KiB) — the same optionality the 0.1.7 official `Config` uses.
+   */
+  maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
   reconnect?: ReconnectConfig
 }

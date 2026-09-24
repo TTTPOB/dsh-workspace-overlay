@@ -19,6 +19,15 @@ export type Config = StdioConfig | StreamableHttpConfig
 /** Default timeout for individual MCP tool calls (ms). */
 export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60_000
 
+/**
+ * Default ceiling on a server's advertised `instructions` text, in bytes.
+ * Matches the 0.1.7 `@deepseek-ai/dsh-mcp-client` default.
+ */
+export const DEFAULT_MAX_INSTRUCTION_BYTES = 32_768
+
+/** Constraint shared by both transports for {@link DEFAULT_MAX_INSTRUCTION_BYTES}. */
+const MaxInstructionBytes = z.number().step(1).min(1).default(DEFAULT_MAX_INSTRUCTION_BYTES)
+
 /** Valid `serverName`, kept below the public tool-name budget. */
 export const SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/
 
@@ -40,6 +49,7 @@ export const Config = z.union([
     cwd: z.string().default(''),
     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
     failOnStartupError: z.boolean().default(false),
+    maxInstructionBytes: MaxInstructionBytes,
     reconnect: Reconnect,
   }),
   z.object({
@@ -49,6 +59,7 @@ export const Config = z.union([
     headers: z.dict(String).default({}),
     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
     failOnStartupError: z.boolean().default(false),
+    maxInstructionBytes: MaxInstructionBytes,
     reconnect: Reconnect,
   }),
 ]) as unknown as z<Config>

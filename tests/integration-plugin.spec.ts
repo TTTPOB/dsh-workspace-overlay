@@ -2,12 +2,33 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { symbols, type Fiber } from '@deepseek-ai/cordis'
 import SessionProjections from '@deepseek-ai/dsh-session-projection'
 import type { AgentRegistry, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
-import { AgentPresets, type Config as RosterConfig } from '@deepseek-ai/dsh-agent-presets'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+// 0.1.7 renamed the package (`dsh-agent-presets` -> `dsh-agent-preset-registry`)
+// and the service class (`AgentPresets` -> `AgentPresetRegistry`); the Cordis
+// service name is still `agentPresets`. The file-roster `Config` is gone with it:
+// `default` survives as a selection policy, and a preset is now an in-memory
+// `PresetDefinition` handed to `registry.register()` instead of a directory
+// discovered under a scanned presets root.
+import { AgentPresetRegistry, type PresetDefinition } from '@deepseek-ai/dsh-agent-preset-registry'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import * as plugin from '../src/integration-plugin.js'
-import { harness, markerPreset, resetFixtures, seedPreset, teardown, type Harness } from './helpers.js'
+import { FIXTURES, harness, resetFixtures, teardown, type Harness } from './helpers.js'
+
+/**
+ * Absolute `file://` URL of one committed fixture plugin. With no roster root to
+ * resolve against, a preset row names its plugin the way a host plugin is named:
+ * by an absolute URL or a specifier the Loader can resolve from the host base.
+ */
+const fixturePlugin = (file: string): string => pathToFileURL(join(FIXTURES, 'plugins', file)).href
+
+/** The one preset this suite declares, mirroring the old seeded `standard` row. */
+const standardPreset: PresetDefinition = {
+  id: 'standard',
+  plugins: [{ id: 'marker', name: fixturePlugin('contribute.js'), config: { marker: 'standard' } }],
+}
+
+/** The 0.1.7 selection policy; the plugin schema fills the volatile fields. */
+const selection = { default: 'standard' }
 
 /** Bare record-only stand-in for the agents service. */
 class MinimalRegistry {
@@ -27,24 +48,22 @@ class MinimalRegistry {
 }
 
 let host: Harness
-let presetsRoot: string
+let presetFiber: Fiber
 
 beforeEach(async () => {
   resetFixtures()
   host = await harness()
-  presetsRoot = await mkdtemp(join(tmpdir(), 'dsh-ws-plugin-'))
-  const roster: RosterConfig = {
-    default: 'standard',
-    roots: [{ path: presetsRoot, trust: 'system' }],
-    includeUserRoot: false,
-    includeShippedRoot: false,
-  }
   await host.ctx.plugin(SessionProjections)
-  await host.ctx.plugin(AgentPresets, roster)
+  // The registry injects `loader` and `sessionProjections`, so it composes
+  // after both, and eagerly activates everything it is handed.
+  presetFiber = await host.ctx.plugin(AgentPresetRegistry, selection)
+  await (host.ctx.get('agentPresets') as unknown as AgentPresetRegistry).register(standardPreset)
 })
 
 afterEach(async () => {
-  await rm(presetsRoot, { recursive: true, force: true })
+  // The live-mount set is module state spanning every runtime in the process,
+  // so the registry fiber goes down before the harness temp root is removed.
+  await presetFiber.dispose()
   await teardown(host)
 })
 
@@ -59,7 +78,6 @@ describe('integration-plugin module shape', () => {
   })
 
   it('composes as a real Loader row, installs the decorators, and reverts on dispose', async () => {
-    await seedPreset(presetsRoot, 'standard', markerPreset('standard'))
     const stub = new MinimalRegistry()
     host.ctx.provide('agents', stub as unknown as AgentRegistry)
 

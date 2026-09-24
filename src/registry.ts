@@ -44,6 +44,7 @@ import { realpath, stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import {
   mountWorkspaceTree,
+  redactSourceExcerpt,
   workspaceConfigPath,
   type MountedWorkspaceTree,
 } from './workspace-tree.js'
@@ -624,14 +625,17 @@ export default class WorkspaceRegistry extends Service {
    * Aggregates are flattened one line per cause so a multi-row loader failure
    * names every row; the fallbacks keep hostile values readable. Only error
    * messages are used — never config text, environment values, or headers —
-   * because these lines are written to the log.
+   * because these lines are written to the log. Each message additionally
+   * passes through {@link redactSourceExcerpt}, because the loader embeds the
+   * offending config body in its parse errors and a workspace composition
+   * carries secrets (a server URL with a bearer token, an env value).
    */
   private static flattenError(error: unknown): string {
     if (error instanceof AggregateError) {
-      return [error.message, ...error.errors.map(cause => `- ${WorkspaceRegistry.flattenError(cause)}`)].join('\n')
+      return [redactSourceExcerpt(error.message), ...error.errors.map(cause => `- ${WorkspaceRegistry.flattenError(cause)}`)].join('\n')
     }
-    if (error instanceof Error) return error.message
-    return String(error)
+    if (error instanceof Error) return redactSourceExcerpt(error.message)
+    return redactSourceExcerpt(String(error))
   }
 
   /** Log a watcher-level error with the workspace identity, never the config. */
