@@ -4,7 +4,7 @@
 
 DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis scope（`workspaceCordis` service）。同一 workspace 的所有消费者（session、agent）租用同一个 scope；最后一个租约释放时 scope 被 dispose。可选地，首个租约会把 `<workspace>/.dsh/cordis.yml` 挂载为该 workspace 的 Cordis composition，并默认监听该顶层配置文件——编辑保存即整树热重载（见「Workspace 热重载」）；bundle 同时接线 Agent 集成：`ctx.agents.create/resume` 前置 workspace 绑定，官方 `agentPresets` 的 mount/composeFrom/recompose 被 decorator 接管为 workspace-local preset generation（见下文「Agent 集成」）。`./mcp` 子路径提供从官方 rc.6 `@deepseek-ai/dsh-mcp-client` 移植的 MCP core（transport / tool sync / connection supervisor），以及 workspace-aware MCP manager + 插件入口（global 每 serverName 一进程、workspace override 每 workspace 一进程、继承 global 的 workspace 零额外进程、同名 namespace 整体遮蔽，见「MCP manager」）。
 
-开发与发布验证基线：DSH service 包 `0.1.5-rc.2`、Cordis `4.0.2`、Include `1.0.7`、Loader `1.0.3`。共享运行时包声明为 peer，开发依赖固定测试基线；运行时必须与 Host 解析到同一个模块实例。RC 兼容范围按 `package.json` 声明，不自动承诺跨 RC 基线兼容。`@deepseek-ai/dsh-mcp-client` 只作为开发依赖用于 Config parity 测试。
+开发与发布验证基线：DSH service 包 `0.1.7-rc.2`（Agent 与 preset registry 使用 fork seam）、Cordis `4.0.4`、Schemastery `3.18.4`、Include `1.0.9`、Loader `1.0.5`。共享运行时包声明为 peer，开发依赖固定测试基线；运行时必须与 Host 解析到同一个模块实例。RC 兼容范围按 `package.json` 声明，不自动承诺跨 RC 基线兼容。`@deepseek-ai/dsh-mcp-client` 只作为开发依赖用于 Config parity 测试。
 
 ## API（`./registry`）
 
@@ -20,7 +20,7 @@ DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis sc
 
 - `WorkspaceTree extends Include`：配置文件固定为 `<canonical>/.dsh/cordis.yml`；`write()` 为 no-op（workspace config 是输入，Loader teardown 永不写回）。
 - specifier 解析与官方 `PresetTree` 一致：`./`／`../` 按 `.dsh` 目录解析；绝对路径转 file URL；裸包名通过挂载前捕获的 Host base + `ctx.loader.internal.import` 从 Host 依赖树解析（不读 workspace 任意 `node_modules`）。
-- `mountWorkspaceTree(scopeCtx, workspace)`：`await handle.await()` 后复用 `@deepseek-ai/dsh-agent-presets` 导出的 `inactiveRows`／`leakedServices` 做挂载审计——拒绝未激活／缺 inject 的 row，拒绝把 service 发布进 root realm 的 row（isolate realm 内的发布是合法的）。失败时 dispose 子树并抛 `WorkspaceMountError`（携带 workspace 路径）。
+- `mountWorkspaceTree(scopeCtx, workspace)`：`await handle.await()` 后复用 `@deepseek-ai/dsh-agent-preset-registry` 导出的异步 `auditRows`／`leakedServices` 做挂载审计——拒绝未激活／缺 inject 的 row，拒绝把 service 发布进 root realm 的 row（isolate realm 内的发布是合法的）。失败时 dispose 子树并抛 `WorkspaceMountError`（携带 workspace 路径）。
 - `MountedWorkspaceTree.dispose()`：幂等、可 await 的 exact-subtree disposer——只卸载这一棵子树（live reload 用它替换整树），workspace scope 与其子资源存活；scope 的最终 dispose 仍是兜底所有者，遇到已卸载的旧子树是安全的。watcher 与热重载语义见「Workspace 热重载」一节。
 
 ## Workspace 热重载（`./workspace-reload-controller`）
@@ -164,18 +164,8 @@ pnpm build
 
 Workspace 热重载另有四组覆盖：确定性的 fake-watcher Registry 集成（`workspace-registry-reload.spec.ts`——严格初始挂载与 watcher ready 门禁、valid→valid/invalid/absent 各方向、invalid 后 scope/lease 存活且下个事件恢复、同 workspace 多租约共享一个 watcher、final release 收敛、trust/watch=false）；真实 chokidar + 临时目录（`workspace-live-reload.spec.ts`——change／atomic rename／unlink→add、`.dsh` 后出现才创建 config、双 workspace 独立 reload、release 后写文件不再反应、不在用户 workspace 里创建 `.dsh`）；live 能力视图（`workspace-tools-live.spec.ts`——不替换 workspace/Agent key 的前提下，下一次 `tools.schemas()` 视图看到新工具表面，invalid 时工具面暂时清空、修复后恢复）；MCP live reload（`tests/mcp/manager-live-reload.spec.ts`——reload 替换 workspace MCP 进程与工具且 global mask 保持正确、坏 server 使 reload 失败但 scope/lease 活、修复后恢复、final release 无进程/工具/mask 残留）。
 
-## Agent 集成（bundle 已启用）
+## Agent 集成
 
-`cordis.patch.yml` 现在插入三行：`workspace-registry`（provider）、`workspace-mcp-manager`（provider）与 `workspace-agent-integration`（`dsh-workspace-overlay/integration-plugin`）。官方 `agent-presets` row 原样保留；integration 行通过 `inject = ['agents', 'agentPresets', 'workspaceCordis']` 等到三个服务就绪后，可逆地包装 provider-owned 的 `ctx.agents.create/resume` 与 `ctx.agentPresets.mount/composeFrom/recompose`（共用同一个 `AgentBindingCoordinator` 与 `WorkspacePresetRegistry`，dispose 按逆序恢复全部 5 个 method descriptor）。
+`workspace-agent-integration` 等待 `agents`、`agentPresets` 和 `workspaceCordis`，通过 `ctx.agents.registerSetup()` 注册可撤销的 awaited contribution。创建与恢复 Agent 时，先读取 `agent.session.header.cwd`，获取 canonical workspace lease，再调用 `ctx.agentPresets.place(agentCtx, lease)`。placement 成功后，官方 preset registry 独占 lease、Agent parent binding、generation rebind 和异步释放；失败时本插件释放尚未转交的 lease。调用方 setup 在此之后执行。没有 preset 的 Agent 保持 workspace parent。
 
-### 支持的 Agent 创建入口
-
-- **Web 以及所有走公开异步 `ctx.agents.create/resume` 的 consumer**（ACP、SDK/headless、in-process subagent driver）：组合 setup 先 `acquire(cwd)` 再 `bind(agentKey, lease.key)`，随后调用方 setup 里的官方 `agentPresets.mount` 被 decorator 接管：resolve + broken 检查 → 按 `(workspace, preset, 文件 stat stamp)` 确保 workspace-local preset generation（`createScope(lease.ctx, genKey, { parent: lease.key })` 下挂载官方 `mountPreset()`，同一 workspace 多 Agent 共享同一 generation，stamp 变化生成新 generation，旧 superseded generation 在 joined 归零时 dispose）→ rebind agent 到 generation key 并平衡 joined 计数。subagent 的同步 `composeFrom` 继承 parent 的 exact generation（无 I/O、不重挂载；跨 workspace 或 parent 无本 coordinator 记录时明确拒绝/保持 rosterless）；blank-session `recompose` 同样在 workspace 内切换 generation。
-- Agent 的 direct parent 是 `mountPreset()` 登记的 generation key，因此官方 `standingMountFor()`／`composedPreset()`／`serviceFor()` 无需包装即可沿 `agent → workspace-local preset` 解析（集成测试证明）。
-- Agent scope 的 effect disposer 统一走 `coordinator.unbind()`：先 leave preset generation，再 release workspace lease。
-
-### 明确不支持的路径
-
-- **同步旁路**：`AgentLoop.create(id, options, meta)` 与直接调用 factory 的 `createAgent/resume` 没有 awaited setup seam，不会获得 workspace 绑定——启用本 bundle 的 profile 不得包含配置驱动的同步 Agent entries。
-- **decorator 自身的 live HMR**：decorator 是启动结构插件，开发自身时需先 dispose 全部 live Agent 或重启 Host；Host 正常 teardown 与无 live Agent 的 fiber dispose 会完整恢复 5 个 method 并清理 registry（已测试）。
-- **冷 transcript 恢复**：`standingKeyFor()` 继续走官方 global standing，不带 workspace 参数。
+同步配置创建路径不经过该 awaited contribution，不提供 workspace 绑定。个人 Web 发行组合直接声明这三个插件行，并将 overlay 排在 envrc 前；日用 profile 不安装插件依赖。

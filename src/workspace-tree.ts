@@ -18,7 +18,7 @@
 import { Context, type Fiber } from '@deepseek-ai/cordis'
 import { Include } from '@deepseek-ai/cordis-plugin-include'
 import type { EntryTree } from '@deepseek-ai/cordis-plugin-loader'
-import { inactiveRows, leakedServices } from '@deepseek-ai/dsh-agent-presets'
+import { auditRows, leakedServices } from '@deepseek-ai/dsh-agent-preset-registry'
 import { scopeOf } from '@deepseek-ai/dsh-scope'
 import { isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -205,8 +205,9 @@ export async function mountWorkspaceTree(
     const subtree = mounted.get(config)
     /* v8 ignore next -- the subclass constructor runs before `await()` settles for every mounted tree */
     if (subtree === undefined) throw new Error('mounted subtree did not publish its entry tree')
-    const unusable = inactiveRows(subtree.tree)
-    if (unusable.length > 0) {
+    const audit = await auditRows(subtree.tree)
+    if (audit.failed.length > 0 || audit.pending.length > 0) {
+      const unusable = [...audit.failed, ...audit.pending]
       throw new Error(`${String(unusable.length)} row(s) did not activate:\n${unusable.join('\n')}`)
     }
     const leaked = leakedServices(scopeCtx, subtree.fiber)
