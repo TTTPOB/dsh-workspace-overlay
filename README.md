@@ -2,9 +2,9 @@
 
 > English version: [docs/README.en.md](docs/README.en.md)
 
-DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis scope（`workspaceCordis` service）。同一 workspace 的所有消费者（session、agent）租用同一个 scope；最后一个租约释放时 scope 被 dispose。可选地，首个租约会把 `<workspace>/.dsh/cordis.yml` 挂载为该 workspace 的 Cordis composition，并默认监听该顶层配置文件——编辑保存即整树热重载（见「Workspace 热重载」）；bundle 同时接线 Agent 集成：`ctx.agents.create/resume` 前置 workspace 绑定，官方 `agentPresets` 的 mount/composeFrom/recompose 被 decorator 接管为 workspace-local preset generation（见下文「Agent 集成」）。`./mcp` 子路径提供从官方 rc.6 `@deepseek-ai/dsh-mcp-client` 移植的 MCP core（transport / tool sync / connection supervisor），以及 workspace-aware MCP manager + 插件入口（global 每 serverName 一进程、workspace override 每 workspace 一进程、继承 global 的 workspace 零额外进程、同名 namespace 整体遮蔽，见「MCP manager」）。
+DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis scope（`workspaceCordis` service）。同一 workspace 的所有消费者（session、agent）租用同一个 scope；最后一个租约释放时 scope 被 dispose。可选地，首个租约会把 `<workspace>/.dsh/cordis.yml` 挂载为该 workspace 的 Cordis composition，并默认监听该顶层配置文件——编辑保存即整树热重载（见「Workspace 热重载」）；bundle 同时通过 awaited setup contribution 把 Agent 放入 workspace；官方 preset registry 独占 parent binding 与 preset generation（见下文「Agent 集成」）。`./mcp` 子路径提供从官方 rc.6 `@deepseek-ai/dsh-mcp-client` 移植的 MCP core（transport / tool sync / connection supervisor），以及 workspace-aware MCP manager + 插件入口（global 每 serverName 一进程、workspace override 每 workspace 一进程、继承 global 的 workspace 零额外进程、同名 namespace 整体遮蔽，见「MCP manager」）。
 
-开发与发布验证基线：DSH service 包 `0.1.7-rc.2`（Agent 与 preset registry 使用 fork seam）、Cordis `4.0.4`、Schemastery `3.18.4`、Include `1.0.9`、Loader `1.0.5`。共享运行时包声明为 peer，开发依赖固定测试基线；运行时必须与 Host 解析到同一个模块实例。RC 兼容范围按 `package.json` 声明，不自动承诺跨 RC 基线兼容。`@deepseek-ai/dsh-mcp-client` 只作为开发依赖用于 Config parity 测试。
+开发与发布验证基线：DSH service 包 `0.1.7-rc.2`（Agent 与 preset registry 使用 fork seam）、Cordis `4.0.4`、Schemastery `3.18.4`、Include `1.0.9`、Loader `1.0.5`。共享运行时包声明为 peer，开发依赖记录官方测试基线；构建与测试必须显式 override Agent 和 preset registry 为目标 fork1 tarball，不能把官方基线类型检查通过视为新 API 生效。运行时必须与 Host 解析到同一个模块实例。RC 兼容范围按 `package.json` 声明，不自动承诺跨 RC 基线兼容。`@deepseek-ai/dsh-mcp-client` 只作为开发依赖用于 Config parity 测试。
 
 ## API（`./registry`）
 
@@ -38,22 +38,17 @@ DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis sc
 
 ### 明确不 watch / 不做的（限制）
 
-- 不 watch preset `agent.cordis.yml`，也不在 preset 换代时自动 rebind live Agent；
+- 不处理 preset definition 更新与 Agent rebind；这两项由官方 preset registry 拥有；
 - 不 watch 被 composition import 的 JS/package 模块，不 watch nested include 的 YAML，不跟踪任何依赖关系——编辑依赖文件后 touch 或重新保存顶层 `cordis.yml` 即可触发一次完整 remount（顶层文件才是 reload 单位）；
 - 不 drain 任意 in-flight 的第三方工具调用，也不为第三方 row 的 `apply()`／dispose 提供额外 mount timeout；永久 pending 的第三方生命周期会让当前 reload 与最后 lease release 等待它收敛；
 - 不做 blue-green：不并行生成候选树，失败后不保留上一好树（与 DSH 全局 patch HMR 的运行模型一致）；
-- 不支持 structural `workspace-agent-integration`／`workspace-mcp-manager` provider 自身的 live HMR（与 decorator 同级，开发时需先 dispose 全部 live Agent 或重启 Host）。
+- 不承诺在 live Agent 或 workspace MCP 仍持有资源时热替换集成行或 MCP manager；工作区配置本身可独立热重载。
 
 详细设计、readiness 细节与完整测试矩阵见 [docs/workspace-hot-reload-plan.md](docs/workspace-hot-reload-plan.md)。
 
-## 安装（bundle）
+## 发行组合
 
-```sh
-dsh plugin --profile web add https://github.com/TTTPOB/dsh-workspace-overlay/releases/download/v0.1.1/dsh-workspace-overlay-0.1.1.tgz
-dsh --profile web --dump-config
-```
-
-包内 `dsh.bundle.patch`（`cordis.patch.yml`）插入三行：`workspace-registry`（`workspaceCordis` provider）、`workspace-mcp-manager`（`workspaceMcp` provider）与 `workspace-agent-integration`（`dsh-workspace-overlay/integration-plugin`，AgentRegistry + agentPresets decorator 接线，见下文）。`workspace-registry` 行的 patch config 显式写出 `trustWorkspaceConfig: true`／`watchWorkspaceConfig: true`／`reloadDebounceMs: 150`——patch 覆盖行会整行替换 config，显式写出部署值（与 schema 默认一致）让 `dsh --dump-config` 直接可见。manager 行不配置任何默认 MCP server：global MCP 行由 profile patch 按需添加（见「MCP manager」示例），workspace MCP 行写在各 workspace 的 `.dsh/cordis.yml` 里。
+个人 Web 发行包直接依赖 overlay，并在自身 patch 声明所需行；日用 profile 不通过 plugin add/remove 管理依赖。包内 `dsh.bundle.patch` 保留独立组合入口，包含 `workspace-registry`（`workspaceCordis` provider）、`workspace-mcp-manager`（`workspaceMcp` provider）与 `workspace-agent-integration`（`dsh-workspace-overlay/integration-plugin`，awaited setup 接线，见下文）。`workspace-registry` 行的 patch config 显式写出 `trustWorkspaceConfig: true`／`watchWorkspaceConfig: true`／`reloadDebounceMs: 150`——patch 覆盖行会整行替换 config，显式写出部署值（与 schema 默认一致）让 `dsh --dump-config` 直接可见。manager 行不配置任何默认 MCP server：global MCP 行由 profile patch 按需添加（见「MCP manager」示例），workspace MCP 行写在各 workspace 的 `.dsh/cordis.yml` 里。
 
 ## MCP core（`./mcp` 子路径）
 
@@ -146,7 +141,7 @@ Workspace 行（`<workspace>/.dsh/cordis.yml`）：
 ### 支持边界
 
 - 只支持 scope-aware registry／event 贡献（tools 注册与 `tools.restrict` mask）；MCP 行的 `isolate`/root-service 发布由挂载审计拒绝。
-- 不承诺 manager provider 行自身在 live workspace 行存在时热重载（与 decorator 同级的启动结构插件）；workspace 行随各自 workspace scope 正常 dispose。
+- 不承诺 manager provider 行自身在 live workspace 行存在时热重载（启动结构插件）；workspace 行随各自 workspace scope 正常 dispose。
 - streamable-http 行同样支持（无 cwd 语义）；workspace 行同样强制 `failOnStartupError: true`。
 
 ## 开发

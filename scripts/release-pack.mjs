@@ -29,20 +29,13 @@ for (const target of [packed.main, packed.dsh.bundle.patch, ...Object.values(pac
 }
 const digest = createHash('sha256').update(readFileSync(tarball)).digest('hex')
 writeFileSync(join(destination, 'SHA256SUMS'), `${digest}  ${filename}\n`)
-const repository = pkg.repository.url.replace(/^git\+/, '').replace(/\.git$/, '')
 writeFileSync(join(destination, 'release-notes.md'), [
   `Prebuilt ${pkg.name} ${pkg.version}.`,
   '',
-  'Validated against DSH service packages 0.1.5-rc.2 and Cordis 4.0.2. Shared DSH/Cordis peers must resolve to the Host module instances.',
+  'Validated against DSH 0.1.7-rc.2, Agent/preset-registry fork1, Cordis 4.0.4 and Schemastery 3.18.4.',
   '',
-  'Install with the installed DSH CLI (install overlay before envrc):',
-  '',
-  '```sh',
-  `dsh plugin --profile web add ${repository}/releases/download/${tag}/${filename}`,
-  'dsh --profile web --dump-config',
-  '```',
-  '',
-  'Keep dsh-workspace-overlay before dsh-workspace-envrc in dsh.profile.bundles. Restart the Host after installation.',
+  'The personal Web distribution directly depends on this package and declares its workspace rows before envrc rows.',
+  'Do not install this package as a profile dependency.',
   '',
 ].join('\n'))
 console.log(`Verified ${tarball}: ${entries.length} entries, SHA-256 ${digest}`)

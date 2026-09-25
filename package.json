@@ -116,7 +116,7 @@
     "@deepseek-ai/cordis": "4.0.4",
     "@deepseek-ai/cordis-plugin-include": "1.0.9",
     "@deepseek-ai/cordis-plugin-loader": "1.0.5",
-    "@deepseek-ai/dsh-agent": "0.1.7-rc.2-fork1",
+    "@deepseek-ai/dsh-agent": "0.1.7-rc.2",
     "@deepseek-ai/dsh-invariants": "0.1.7-rc.2",
     "@deepseek-ai/dsh-llm": "0.1.7-rc.2",
     "@deepseek-ai/dsh-mcp-client": "0.1.7-rc.2",
@@ -131,7 +131,7 @@
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0",
-    "@deepseek-ai/dsh-agent-preset-registry": "0.1.7-rc.2-fork1"
+    "@deepseek-ai/dsh-agent-preset-registry": "0.1.7-rc.2"
   },
   "license": "MIT"
 }
