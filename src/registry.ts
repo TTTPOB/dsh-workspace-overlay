@@ -630,7 +630,10 @@ export default class WorkspaceRegistry extends Service {
     if (error instanceof AggregateError) {
       return [error.message, ...error.errors.map(cause => `- ${WorkspaceRegistry.flattenError(cause)}`)].join('\n')
     }
-    if (error instanceof Error) return error.message
+    if (error instanceof Error) {
+      // YAML parser diagnostics include source excerpts after their location.
+      return error.message.split(/\n\s*\d+\s*\|/u, 1)[0]!
+    }
     return String(error)
   }
 
