@@ -48,10 +48,7 @@ The detailed design, readiness details, and the full test matrix are in [`worksp
 
 ## Installation (bundle)
 
-```sh
-dsh plugin --profile web add https://github.com/TTTPOB/dsh-workspace-overlay/releases/download/v0.1.1/dsh-workspace-overlay-0.1.1.tgz
-dsh --profile web --dump-config
-```
+Install the package as an ordinary dependency in the resolving profile (`autoInstallPeers: false`), and declare the shared rows in `$DSH_HOME/cordis.patch.yml`. Daily bundles remain the official base and Web app; do not auto-append this package's bundle alongside those rows. This is a module-resolution location, not Web-specific behavior.
 
 The package's `dsh.bundle.patch` (`cordis.patch.yml`) inserts three rows: `workspace-registry` (`workspaceCordis` provider), `workspace-mcp-manager` (`workspaceMcp` provider) and `workspace-agent-integration` (`dsh-workspace-overlay/integration-plugin`, AgentRegistry + agentPresets decorator wiring, see below). The `workspace-registry` row's patch config states `trustWorkspaceConfig: true` / `watchWorkspaceConfig: true` / `reloadDebounceMs: 150` explicitly — a patch row replaces the target row's whole config, so stating the deployed values (which match the schema defaults) keeps them visible in `dsh --dump-config`. The manager row configures no default MCP servers: global MCP rows are added by profile patch as needed (see the "MCP manager" example), and workspace MCP rows are written into each workspace's `.dsh/cordis.yml`.
 

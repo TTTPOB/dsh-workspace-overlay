@@ -48,7 +48,7 @@ DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis sc
 
 ## 发行组合
 
-个人 Web 发行包直接依赖 overlay，并在自身 patch 声明所需行；日用 profile 不通过 plugin add/remove 管理依赖。包内 `dsh.bundle.patch` 保留独立组合入口，包含 `workspace-registry`（`workspaceCordis` provider）、`workspace-mcp-manager`（`workspaceMcp` provider）与 `workspace-agent-integration`（`dsh-workspace-overlay/integration-plugin`，awaited setup 接线，见下文）。`workspace-registry` 行的 patch config 显式写出 `trustWorkspaceConfig: true`／`watchWorkspaceConfig: true`／`reloadDebounceMs: 150`——patch 覆盖行会整行替换 config，显式写出部署值（与 schema 默认一致）让 `dsh --dump-config` 直接可见。manager 行不配置任何默认 MCP server：global MCP 行由 profile patch 按需添加（见「MCP manager」示例），workspace MCP 行写在各 workspace 的 `.dsh/cordis.yml` 里。
+overlay 作为独立插件由解析它的 profile 普通 dependencies 安装（`autoInstallPeers: false`），共用插件行统一声明在 `$DSH_HOME/cordis.patch.yml`；日用 bundles 只保留官方 base／Web app，不自动追加本包 bundle 以免重复插入。包内 `dsh.bundle.patch` 保留独立组合入口，包含 `workspace-registry`（`workspaceCordis` provider）、`workspace-mcp-manager`（`workspaceMcp` provider）与 `workspace-agent-integration`（`dsh-workspace-overlay/integration-plugin`，awaited setup 接线，见下文）。`workspace-registry` 行的 patch config 显式写出 `trustWorkspaceConfig: true`／`watchWorkspaceConfig: true`／`reloadDebounceMs: 150`——patch 覆盖行会整行替换 config，显式写出部署值（与 schema 默认一致）让 `dsh --dump-config` 直接可见。manager 行不配置任何默认 MCP server：global MCP 行由 profile patch 按需添加（见「MCP manager」示例），workspace MCP 行写在各 workspace 的 `.dsh/cordis.yml` 里。
 
 ## MCP core（`./mcp` 子路径）
 
