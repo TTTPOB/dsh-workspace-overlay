@@ -43,9 +43,21 @@ export function workspaceConfigPath(workspace: string): string {
  */
 export function evictWorkspaceModules(scopeCtx: Context, workspace: string): void {
   const cache = scopeCtx.get('loader')?.internal?.loadCache
-  if (!cache) return
+  if (!cache) throw new Error('workspace-cordis: local code reload requires the Host Loader internal module cache')
   const owned = join(workspace, '.dsh')
   const require = createRequire(import.meta.url)
+  const isOwned = (file: string): boolean => {
+    const inside = relative(owned, file)
+    if (!inside || inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return false
+    if (inside.split(sep).includes('node_modules')) return false
+    try {
+      const physical = relative(owned, realpathSync(file))
+      if (physical === '..' || physical.startsWith(`..${sep}`) || isAbsolute(physical)) return false
+    } catch {
+      // A removed local file still has a stale job that must be evicted.
+    }
+    return true
+  }
   for (const url of cache.keys()) {
     if (!url.startsWith('file:')) continue
     let file: string
@@ -54,19 +66,14 @@ export function evictWorkspaceModules(scopeCtx: Context, workspace: string): voi
     } catch {
       continue
     }
-    const inside = relative(owned, file)
-    if (!inside || inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) continue
-    if (inside.split(sep).includes('node_modules')) continue
-    try {
-      const physical = relative(owned, realpathSync(file))
-      if (physical === '..' || physical.startsWith(`..${sep}`) || isAbsolute(physical)) continue
-    } catch {
-      // A removed local file still has a stale job that must be evicted.
-    }
+    if (!isOwned(file)) continue
     // Node 24's LoadCache.delete clears only a format slot; deleting the raw
     // Map entry works on both Node 22 and 24, as in Cordis HMR.
     Map.prototype.delete.call(cache, url)
-    delete require.cache[file]
+  }
+  // require()-only dependencies need not have an ESM ModuleJob at all.
+  for (const file of Object.keys(require.cache)) {
+    if (isOwned(file)) delete require.cache[file]
   }
 }
 

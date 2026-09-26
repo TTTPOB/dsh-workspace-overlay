@@ -11,6 +11,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { rename, rm, stat, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import {
   fixtureState,
@@ -108,6 +109,63 @@ describe('WorkspaceRegistry live reload over the real filesystem', () => {
     await vi.waitFor(() => expect(fixtureState().markers).toEqual(['a1old', 'b', 'a2new', 'a2fixed']), { timeout: 5000 })
     expect(leaseA.ctx.bail('workspace/code-check')).toBe('fixed')
     expect(host.registry.get(b)?.reload?.successfulReloads).toBe(0)
+  })
+
+  it('refreshes a require-only local dependency but retains modules outside .dsh', async () => {
+    const ws = await makeWorkspace(host.root, 'cjs-code')
+    await seedPlugins(ws, ['contribute.js'])
+    const entry = join(ws, '.dsh', 'plugins', 'contribute.js')
+    const helper = join(ws, '.dsh', 'plugins', 'helper.cjs')
+    const external = join(ws, 'external.cjs')
+    await writeFile(external, "module.exports = { version: 'stable' }\n")
+    await writeFile(helper, "module.exports = { version: 'old' }\n")
+    await writeFile(entry, `import { createRequire } from 'node:module'\nconst require = createRequire(import.meta.url)\nconst helper = require('./helper.cjs')\nconst external = require('../../external.cjs')\nexport function apply(ctx) { ctx.on('workspace/code-check', () => helper.version + external.version) }\n`)
+    const configPath = await writeConfig(ws, markerRow('unused'))
+    const lease = await host.registry.acquire(ws)
+    const require = createRequire(import.meta.url)
+    const oldExternal = require.cache[external]
+    const oldHelper = require.cache[helper]
+    expect(oldExternal).toBeDefined()
+    expect(oldHelper).toBeDefined()
+    expect(lease.ctx.bail('workspace/code-check')).toBe('oldstable')
+
+    await writeFile(helper, "module.exports = { version: 'new' }\n")
+    await writeFile(configPath, markerRow('unused') + '# code changed\n')
+    await vi.waitFor(() => expect(lease.ctx.bail('workspace/code-check')).toBe('newstable'), { timeout: 5000 })
+    expect(require.cache[helper]).not.toBe(oldHelper)
+    expect(require.cache[external]).toBe(oldExternal)
+  })
+
+  it('reports unavailable module cache on live reload without affecting initial mount', async () => {
+    const ws = await makeWorkspace(host.root, 'no-internals')
+    await seedPlugins(ws, ['contribute.js'])
+    const configPath = await writeConfig(ws, markerRow('initial'))
+    const lease = await host.registry.acquire(ws)
+    expect(fixtureState().markers).toEqual(['initial'])
+    const loader = host.ctx.loader
+    const internal = loader.internal
+    const warnings: string[] = []
+    const removeExporter = host.ctx.logger.exporter({
+      levels: { default: 2 },
+      export: (message) => {
+        if (message.type === 'warn') warnings.push(message.args.join(' '))
+      },
+    })
+    loader.internal = undefined
+    try {
+      await writeFile(configPath, markerRow('changed'))
+      await vi.waitFor(() => expect(host.registry.get(ws)?.reload?.status).toBe('failed'), { timeout: 5000 })
+      expect(warnings.join('\n')).toContain('local code reload requires the Host Loader internal module cache')
+      expect(fixtureState().disposed).toBe(1)
+      expect(fixtureState().markers).toEqual(['initial'])
+      expect(host.registry.get(ws)?.composition).toBeUndefined()
+    } finally {
+      loader.internal = internal
+      removeExporter()
+    }
+    await writeFile(configPath, markerRow('recovered') + '# retry\n')
+    await vi.waitFor(() => expect(fixtureState().markers).toEqual(['initial', 'recovered']), { timeout: 5000 })
+    expect(lease.ctx).toBeDefined()
   })
 
   it('unlink yields an empty workspace layer and a later add recovers it', async () => {
