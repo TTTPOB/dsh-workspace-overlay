@@ -39,7 +39,7 @@ DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis sc
 ### 明确不 watch / 不做的（限制）
 
 - 不处理 preset definition 更新与 Agent rebind；这两项由官方 preset registry 拥有；
-- 不 watch 被 composition import 的 JS/package 模块，不 watch nested include 的 YAML，不跟踪任何依赖关系——编辑依赖文件后 touch 或重新保存顶层 `cordis.yml` 即可触发一次完整 remount（顶层文件才是 reload 单位）；
+- 不 watch JS/package 模块或 nested include YAML；本地代码更新后仍须 touch 或重新保存顶层 `cordis.yml` 触发重载。旧子树卸载后仅失效该 workspace 自有 `.dsh/` 下已加载的本地 ESM/CJS 模块缓存，包括 `.dsh/plugins/` 入口及目录内相对依赖；不失效 `node_modules`、指向目录外的 symlink、workspace 外模块或宿主共享 Cordis 服务，不跟踪跨目录依赖。改动这些排除项需通过其所属加载机制更新或重启 Host；
 - 不 drain 任意 in-flight 的第三方工具调用，也不为第三方 row 的 `apply()`／dispose 提供额外 mount timeout；永久 pending 的第三方生命周期会让当前 reload 与最后 lease release 等待它收敛；
 - 不做 blue-green：不并行生成候选树，失败后不保留上一好树（与 DSH 全局 patch HMR 的运行模型一致）；
 - 不承诺在 live Agent 或 workspace MCP 仍持有资源时热替换集成行或 MCP manager；工作区配置本身可独立热重载。

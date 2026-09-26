@@ -20,8 +20,10 @@ import { Include } from '@deepseek-ai/cordis-plugin-include'
 import type { EntryTree } from '@deepseek-ai/cordis-plugin-loader'
 import { auditRows, leakedServices } from '@deepseek-ai/dsh-agent-preset-registry'
 import { scopeOf } from '@deepseek-ai/dsh-scope'
-import { isAbsolute, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { realpathSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { isAbsolute, join, relative, sep } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /** The fixed config file every workspace composition is read from. */
 const CONFIG_REL = join('.dsh', 'cordis.yml')
@@ -29,6 +31,43 @@ const CONFIG_REL = join('.dsh', 'cordis.yml')
 /** The absolute path of one workspace's composition file. */
 export function workspaceConfigPath(workspace: string): string {
   return join(workspace, CONFIG_REL)
+}
+
+/**
+ * Evict loaded local modules owned by one workspace before remounting its tree.
+ * Only files physically inside its `.dsh` directory qualify; installed packages,
+ * symlinks outside it, and other workspaces retain their module identity.
+ * The caller must first await disposal of the old subtree.
+ * @param scopeCtx - context providing the Host's Node module loader.
+ * @param workspace - canonical workspace whose local code changed.
+ */
+export function evictWorkspaceModules(scopeCtx: Context, workspace: string): void {
+  const cache = scopeCtx.get('loader')?.internal?.loadCache
+  if (!cache) return
+  const owned = join(workspace, '.dsh')
+  const require = createRequire(import.meta.url)
+  for (const url of cache.keys()) {
+    if (!url.startsWith('file:')) continue
+    let file: string
+    try {
+      file = fileURLToPath(url)
+    } catch {
+      continue
+    }
+    const inside = relative(owned, file)
+    if (!inside || inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) continue
+    if (inside.split(sep).includes('node_modules')) continue
+    try {
+      const physical = relative(owned, realpathSync(file))
+      if (physical === '..' || physical.startsWith(`..${sep}`) || isAbsolute(physical)) continue
+    } catch {
+      // A removed local file still has a stale job that must be evicted.
+    }
+    // Node 24's LoadCache.delete clears only a format slot; deleting the raw
+    // Map entry works on both Node 22 and 24, as in Cordis HMR.
+    Map.prototype.delete.call(cache, url)
+    delete require.cache[file]
+  }
 }
 
 /** A workspace composition failed to mount and was fully unwound. */

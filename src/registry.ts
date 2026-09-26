@@ -43,6 +43,7 @@ import z from '@deepseek-ai/schemastery'
 import { realpath, stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import {
+  evictWorkspaceModules,
   mountWorkspaceTree,
   workspaceConfigPath,
   type MountedWorkspaceTree,
@@ -555,6 +556,7 @@ export default class WorkspaceRegistry extends Service {
     entry.configured = true
     if (current !== undefined) await current.dispose()
     if (entry.disposed) return
+    evictWorkspaceModules(this.selfCtx, entry.canonical)
     const mounted = await mountWorkspaceTree(entry.scope.ctx, entry.canonical)
     if (entry.disposed) {
       // The final release landed while the subtree mounted: unwind the fresh

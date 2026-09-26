@@ -24,6 +24,12 @@ import {
   type Harness,
 } from './helpers.js'
 
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    'workspace/code-check'(): string
+  }
+}
+
 const DEBOUNCE_MS = 50
 
 /** A short settle window: long enough for debounce + watcher delivery. */
@@ -63,6 +69,45 @@ describe('WorkspaceRegistry live reload over the real filesystem', () => {
       expect(info.reload?.successfulReloads).toBe(1)
       expect(info.composition?.active).toBe(true)
     }, { timeout: 5000 })
+  })
+
+  it('updates local entry and dependency code without disturbing another workspace', async () => {
+    const a = await makeWorkspace(host.root, 'code-a')
+    const b = await makeWorkspace(host.root, 'code-b')
+    for (const ws of [a, b]) {
+      await seedPlugins(ws, ['contribute.js'])
+      await writeConfig(ws, markerRow(ws === a ? 'a' : 'b'))
+    }
+    const entry = join(a, '.dsh', 'plugins', 'contribute.js')
+    const dependency = join(a, '.dsh', 'plugins', 'version.js')
+    const source = (tag: string) => `import { version } from './version.js'\nexport function apply(ctx, config) { globalThis.__WS_FIXTURE__.markers.push(config.marker + version + '${tag}'); ctx.on('workspace/code-check', () => '${tag}'); ctx.effect(() => () => { globalThis.__WS_FIXTURE__.disposed++ }) }\n`
+    await writeFile(dependency, "export const version = '1'\n")
+    await writeFile(entry, source('old'))
+    const leaseA = await host.registry.acquire(a)
+    const leaseB = await host.registry.acquire(b)
+    expect(fixtureState().markers).toEqual(['a1old', 'b'])
+    expect(leaseA.ctx.bail('workspace/code-check')).toBe('old')
+
+    await writeFile(dependency, "export const version = '2'\n")
+    await writeFile(entry, source('new'))
+    await writeFile(join(a, '.dsh', 'cordis.yml'), markerRow('a') + '# reload 1\n')
+    await vi.waitFor(() => expect(fixtureState().markers).toEqual(['a1old', 'b', 'a2new']), { timeout: 5000 })
+    expect(fixtureState().disposed).toBe(1)
+    expect(leaseA.ctx.bail('workspace/code-check')).toBe('new')
+    expect(host.registry.get(leaseB.canonical)?.reload?.successfulReloads).toBe(0)
+
+    await writeFile(entry, 'export function apply( { syntax error\n')
+    await writeFile(join(a, '.dsh', 'cordis.yml'), markerRow('a') + '# reload 2\n')
+    await vi.waitFor(() => expect(host.registry.get(a)?.reload?.status).toBe('failed'), { timeout: 5000 })
+    expect(fixtureState().disposed).toBe(2)
+    expect(leaseA.ctx.bail('workspace/code-check')).toBeUndefined()
+    expect(host.registry.get(b)?.composition?.active).toBe(true)
+
+    await writeFile(entry, source('fixed'))
+    await writeFile(join(a, '.dsh', 'cordis.yml'), markerRow('a') + '# reload 3\n')
+    await vi.waitFor(() => expect(fixtureState().markers).toEqual(['a1old', 'b', 'a2new', 'a2fixed']), { timeout: 5000 })
+    expect(leaseA.ctx.bail('workspace/code-check')).toBe('fixed')
+    expect(host.registry.get(b)?.reload?.successfulReloads).toBe(0)
   })
 
   it('unlink yields an empty workspace layer and a later add recovers it', async () => {
