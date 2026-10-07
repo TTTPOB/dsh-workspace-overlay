@@ -1,0 +1,13 @@
+{
+  "baseline": "0.1.7-rc.2",
+  "dependencies": {
+    "@deepseek-ai/dsh-agent": {
+      "version": "0.1.7-rc.2-fork1",
+      "source": null
+    },
+    "@deepseek-ai/dsh-agent-preset-registry": {
+      "version": "0.1.7-rc.2-fork1",
+      "source": null
+    }
+  }
+}

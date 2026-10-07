@@ -1,6 +1,6 @@
 /**
- * Config schema tests for the ported MCP core, including a parity check
- * against the INSTALLED rc.6 `@deepseek-ai/dsh-mcp-client` Config schema
+ * Config schema tests for the ported MCP core, including supported-field checks
+ * against the official 0.1.7-rc.2 `@deepseek-ai/dsh-mcp-client` Config schema
  * (imported from the public package entry, never a private subpath).
  */
 import { describe, expect, it } from 'vitest'
@@ -68,12 +68,21 @@ describe('mcp Config schema', () => {
     expect(() => Config(rawStdio({ reconnect: { maxAttempts: 0 } }) as never)).toThrow()
   })
 
+  it('rejects unsupported server-instruction configuration for both transports', () => {
+    expect(() => Config(rawStdio({ maxInstructionBytes: 32_768 }) as never)).toThrow()
+    expect(() => Config({ transport: 'streamable-http', serverName: 'web', url: 'http://x/mcp', maxInstructionBytes: 32_768 } as never)).toThrow()
+  })
+
   it('rejects an unknown transport', () => {
     expect(() => Config(rawStdio({ transport: 'sse' }) as never)).toThrow()
   })
 })
 
-describe('parity with the installed rc.6 Config schema', () => {
+describe('supported-field compatibility with the official 0.1.7-rc.2 Config schema', () => {
+  const supported = [
+    'transport', 'serverName', 'command', 'args', 'env', 'cwd', 'url', 'headers',
+    'toolCallTimeoutMs', 'failOnStartupError', 'reconnect',
+  ]
   const cases: Record<string, unknown>[] = [
     rawStdio(),
     rawStdio({ args: ['a', 'b'], env: { K: 'v' }, cwd: '/tmp', toolCallTimeoutMs: 1234, failOnStartupError: true }),
@@ -83,11 +92,11 @@ describe('parity with the installed rc.6 Config schema', () => {
     { transport: 'streamable-http', serverName: 'web', url: 'http://x/mcp', headers: { Authorization: 'Bearer t' } },
   ]
 
-  it('normalizes accepted configs identically', () => {
+  it('normalizes every supported field identically', () => {
     for (const raw of cases) {
       const mine = Config(raw as never)
       const official = OfficialConfig(raw as never)
-      expect(mine).toEqual(official)
+      expect(mine).toEqual(Object.fromEntries(Object.entries(official).filter(([key]) => supported.includes(key))))
     }
   })
 

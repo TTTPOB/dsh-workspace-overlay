@@ -41,6 +41,7 @@ export const Config = z.union([
     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
     failOnStartupError: z.boolean().default(false),
     reconnect: Reconnect,
+    maxInstructionBytes: z.never().description('Server instructions are not supported by the workspace MCP core.'),
   }),
   z.object({
     transport: z.const('streamable-http'),
@@ -50,5 +51,6 @@ export const Config = z.union([
     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
     failOnStartupError: z.boolean().default(false),
     reconnect: Reconnect,
+    maxInstructionBytes: z.never().description('Server instructions are not supported by the workspace MCP core.'),
   }),
 ]) as unknown as z<Config>
