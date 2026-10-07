@@ -27,6 +27,6 @@
 pnpm typecheck && pnpm test && pnpm build && pnpm verify:consumer
 ```
 
-`pnpm test` 通过真实 Loader composition 跑 fixture，不用手工 `ctx.plugin(...)` 代替。`pnpm verify:consumer` 用打包入口与正式 Host 解析器检查共享 peers，不启动 Host。
+`pnpm test` 通过真实 Loader composition 跑 fixture，不用手工 `ctx.plugin(...)` 代替。`pnpm verify:consumer` 用打包入口与正式 Host 解析器检查解析与激活，不启动 Host。
 
 接口与行为见 [README.md](README.md)；决策与已否决方案见 [ADR 0001](docs/adr/0001-workspace-scoped-composition.md)。
