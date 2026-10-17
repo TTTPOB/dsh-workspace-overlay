@@ -37,3 +37,8 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-util-values@0.2.1-rc.1'
   - '@deepseek-ai/dsh-working-directory@0.2.1-rc.1'
   - '@deepseek-ai/schemastery@3.18.5'
+
+overrides:
+  "@deepseek-ai/dsh-agent": "https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.1-rc.1-fork2/deepseek-ai-dsh-agent-0.2.1-rc.1-fork1.tgz"
+  "@deepseek-ai/dsh-agent-preset-registry": "https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.1-rc.1-fork2/deepseek-ai-dsh-agent-preset-registry-0.2.1-rc.1-fork1.tgz"
+  "@deepseek-ai/dsh-session": "https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.1-rc.1-fork1/deepseek-ai-dsh-session-0.2.1-rc.1-fork1.tgz"
