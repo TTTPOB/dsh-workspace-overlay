@@ -1,13 +1,13 @@
 {
-  "baseline": "0.1.7-rc.2",
+  "baseline": "0.2.1-rc.1",
   "dependencies": {
     "@deepseek-ai/dsh-agent": {
-      "version": "0.1.7-rc.2-fork1",
-      "source": "https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.7-rc.2-fork13/deepseek-ai-dsh-agent-0.1.7-rc.2-fork1.tgz"
+      "version": "0.2.1-rc.1-fork1",
+      "source": null
     },
     "@deepseek-ai/dsh-agent-preset-registry": {
-      "version": "0.1.7-rc.2-fork1",
-      "source": "https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.7-rc.2-fork13/deepseek-ai-dsh-agent-preset-registry-0.1.7-rc.2-fork1.tgz"
+      "version": "0.2.1-rc.1-fork1",
+      "source": null
     }
   }
 }

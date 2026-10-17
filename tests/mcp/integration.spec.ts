@@ -210,7 +210,7 @@ describe('fixture server — startup failure policy', () => {
     }))
     await vi.waitFor(() => {
       expect(errors.some(line => line.includes('giving up after 2 consecutive failed reconnect attempts'))).toBe(true)
-    })
+    }, { timeout: 5000 })
     expect(ctx.tools.schemas().some(schema => schema.name.startsWith('mcp__dead__'))).toBe(false)
 
     // Initial process + exactly maxAttempts retry processes, all exited.

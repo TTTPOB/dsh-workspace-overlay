@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 import { resolve, join } from 'node:path'
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
-const contract = JSON.parse(readFileSync('.github/release-dependencies.json', 'utf8'))
+const contract = JSON.parse(readFileSync(process.env.DSH_RELEASE_DEPENDENCIES ?? '.github/release-dependencies.json', 'utf8'))
 const root = resolve('.artifacts/consumer')
 const host = join(root, 'host')
 const home = join(root, 'home')
@@ -16,7 +16,7 @@ const overrides = Object.fromEntries(Object.entries(contract.dependencies).map((
   return [name, dependency.source]
 }))
 const hostDependencies = Object.fromEntries(Object.entries(pkg.devDependencies).filter(([name]) => name.startsWith('@deepseek-ai/')))
-hostDependencies['@deepseek-ai/schemastery'] = '3.18.4'
+hostDependencies['@deepseek-ai/schemastery'] = '3.18.5'
 for (const [name, dependency] of Object.entries(contract.dependencies)) {
   if (name.startsWith('@deepseek-ai/')) hostDependencies[name] = dependency.version
 }
@@ -51,14 +51,15 @@ const profileDir = ${JSON.stringify(profile)}
 const anchor = ${JSON.stringify(join(host, 'package.json'))}
 const pkgName = ${JSON.stringify(pkg.name)}
 const pkgVersion = ${JSON.stringify(pkg.version)}
+const runtimeVersion = ${JSON.stringify(contract.baseline)}
 const profileManifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'))
 assert(!Object.keys(profileManifest.dependencies).some(name => name.startsWith('@deepseek-ai/')))
-const identities = pkgName === 'dsh-workspace-envrc' ? ['dsh-workspace-overlay@0.2.0', pkgName + '@' + pkgVersion] : [pkgName + '@' + pkgVersion]
-for (const identity of identities) await setProfileVersionExemption(profileDir, identity, '0.1.7-rc.2', false, false)
+const identities = pkgName === 'dsh-workspace-envrc' ? ['dsh-workspace-overlay@0.3.0', pkgName + '@' + pkgVersion] : [pkgName + '@' + pkgVersion]
+for (const identity of identities) await setProfileVersionExemption(profileDir, identity, runtimeVersion, false, false)
 let profile = loadProfileDirectory('release-smoke', profileDir, anchor)
 if (pkgName !== 'dsh-progressive-tools') {
   assert.equal(profile.skippedBundles.length, identities.length, 'Fork-only peers must fail official Host admission without informed consent')
-  for (const identity of identities) await setProfileVersionExemption(profileDir, identity, '0.1.7-rc.2', true, true)
+  for (const identity of identities) await setProfileVersionExemption(profileDir, identity, runtimeVersion, true, true)
   profile = loadProfileDirectory('release-smoke', profileDir, anchor)
 }
 assert.deepEqual(profile.skippedBundles, [])
