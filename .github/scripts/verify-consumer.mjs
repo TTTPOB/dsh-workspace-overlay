@@ -21,7 +21,6 @@ const overrides = Object.fromEntries(Object.entries(contract.dependencies).map((
   return [name, dependency.source]
 }))
 const hostDependencies = Object.fromEntries(Object.entries(pkg.devDependencies).filter(([name]) => name.startsWith('@deepseek-ai/')))
-hostDependencies['@deepseek-ai/schemastery'] = pkg.peerDependencies['@deepseek-ai/schemastery']
 for (const [name, dependency] of Object.entries(contract.dependencies)) {
   if (name.startsWith('@deepseek-ai/')) hostDependencies[name] = dependency.version
 }

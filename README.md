@@ -14,7 +14,7 @@ DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis sc
 
 [Validate and release](.github/workflows/release.yml) 与本地共用 `pnpm prepare:release`，执行 frozen 安装和真实消费位置解析检查。[依赖合同](.github/release-dependencies.json) 固定 Agent/preset-registry fork1，未填写的正式资产来源会阻止发布准备；资产存在后，合同与 workspace overrides 填入同一不可变 URL，再由 pnpm 生成锁文件。llm 与用于支持字段对照的 mcp-client 保持官方 `0.2.2-rc.1`。
 
-本地诊断可执行 `node .github/scripts/prepare-local.mjs <inputs.json>`：输入 JSON 将合同包名映射到绝对 tarball 路径，脚本检查名称和版本，在 `.artifacts/local-source` 生成隔离锁文件；在该副本运行既有检查，不改变公开 source manifest。本地 tarball 不是正式发布输入。
+本地诊断可执行 `node .github/scripts/prepare-local.mjs <inputs.json>`：输入 JSON 将合同包名映射到绝对 tarball 路径，脚本检查名称和版本，在 `.artifacts/local-source` 生成隔离锁文件；在该副本运行既有检查，不改变公开 source manifest。本地 tarball 不是正式发布输入。Schemastery 是插件自带的运行依赖，不要求与 Host 共享实例。
 
 `pnpm verify:consumer` 检查打包入口、profile 关闭自动 peers 后的正式 Host 共享解析与真实 Loader 激活。peer 声明按官方 DSH 基线准入，fork API 的完整验证使用合同指定的产物；fixture 不启动或修改真实 Host。
 
