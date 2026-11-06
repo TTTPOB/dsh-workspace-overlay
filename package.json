@@ -1,6 +1,6 @@
 {
   "name": "dsh-workspace-overlay",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Out-of-tree DSH bundle: canonical workspace Cordis scopes, workspace composition reload, Agent integration and workspace-aware MCP.",
   "repository": {
     "type": "git",
@@ -94,47 +94,48 @@
     "verify:consumer": "node .github/scripts/verify-consumer.mjs"
   },
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": ">=24.9.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.5",
-    "@deepseek-ai/cordis-plugin-include": "^1.0.9",
-    "@deepseek-ai/cordis-plugin-loader": "^1.0.6",
-    "@deepseek-ai/dsh-agent": "0.2.1-rc.1-fork1",
-    "@deepseek-ai/dsh-scope": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-subprocess": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-timeout": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-util-values": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-agent-preset-registry": "0.2.1-rc.1-fork1"
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/cordis-plugin-include": "1.1.0",
+    "@deepseek-ai/cordis-plugin-loader": "1.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-subprocess": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-timeout": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-util-values": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-agent-preset-registry": "0.2.2-rc.1"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.5",
+    "@deepseek-ai/schemastery": "3.19.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "chokidar": "^4.0.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.5",
-    "@deepseek-ai/cordis-plugin-include": "1.0.9",
-    "@deepseek-ai/cordis-plugin-loader": "1.0.6",
-    "@deepseek-ai/dsh-agent": "0.2.1-rc.1-fork1",
-    "@deepseek-ai/dsh-llm": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-scope": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-session-projection": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-subprocess": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-timeout": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-util-values": "0.2.1-rc.1",
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/cordis-plugin-include": "1.1.0",
+    "@deepseek-ai/cordis-plugin-loader": "1.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-mcp-client": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-projection": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-subprocess": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-timeout": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-util-values": "0.2.2-rc.1",
     "@types/node": "^24.0.0",
     "typescript": "^6.0.3",
     "vitest": "^3.2.0",
-    "@deepseek-ai/dsh-agent-preset-registry": "0.2.1-rc.1-fork1",
-    "@deepseek-ai/dsh-app-boot": "0.2.1-rc.1"
+    "@deepseek-ai/dsh-agent-preset-registry": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-app-boot": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1"
   },
   "license": "MIT"
 }

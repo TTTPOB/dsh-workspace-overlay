@@ -17,7 +17,7 @@
  */
 import { Context, type Fiber } from '@deepseek-ai/cordis'
 import { Include } from '@deepseek-ai/cordis-plugin-include'
-import type { EntryTree } from '@deepseek-ai/cordis-plugin-loader'
+import type { EntryChange, EntryTree } from '@deepseek-ai/cordis-plugin-loader'
 import { auditRows, leakedServices } from '@deepseek-ai/dsh-agent-preset-registry'
 import { scopeOf } from '@deepseek-ai/dsh-scope'
 import { realpathSync } from 'node:fs'
@@ -172,24 +172,8 @@ export class WorkspaceTree extends Include {
     return internal.import(specifier, base, {})
   }
 
-  /**
-   * A workspace config is an input, never a persistence target.
-   *
-   * The Loader writes a tree back through this method whenever it decides the
-   * config changed — a plugin self-disposing is enough, and disposing the
-   * workspace scope tears the whole subtree down. Inherited, that rewrites
-   * the config file with whatever the dying tree held, which in practice
-   * means truncating a shipped composition to `[]` the first time a workspace
-   * goes idle. Persisting a workspace config is also meaningless: nothing
-   * here is runtime state, and the same file backs every lease of the
-   * workspace.
-   *
-   * Dropping the write drops the `loader/config-update` the inherited method
-   * emits with it. Nothing observes one for a workspace subtree today, and a
-   * future reload flow needs a deliberate persistence path rather than this
-   * method's return.
-   */
-  override write(): void {
+  /** Discard runtime changes: workspace configuration is input, never state. */
+  override commit(_change: EntryChange): void {
   }
 }
 

@@ -10,6 +10,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import type { Fiber } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { createScope, type ScopeKey } from '@deepseek-ai/dsh-scope'
 import type { Config } from '../../src/mcp/types.js'
 import WorkspaceMcpManager from '../../src/mcp/manager.js'
@@ -122,6 +123,7 @@ beforeEach(async () => {
   host = await harness()
   await host.ctx.plugin(SystemPrompt)
   await host.ctx.plugin(ToolRuntime)
+  await host.ctx.plugin(NativeToolExecutor)
   await host.ctx.plugin(WorkspaceMcpManager)
 })
 

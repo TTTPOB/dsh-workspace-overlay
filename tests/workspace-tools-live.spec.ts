@@ -13,6 +13,7 @@
  */
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { createScope, scopeOf, scopeParentOf, type ScopeKey } from '@deepseek-ai/dsh-scope'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { rm, writeFile } from 'node:fs/promises'
@@ -55,6 +56,7 @@ beforeEach(async () => {
   host = await harness({ reloadDebounceMs: DEBOUNCE_MS })
   await host.ctx.plugin(SystemPrompt)
   await host.ctx.plugin(ToolRuntime)
+  await host.ctx.plugin(NativeToolExecutor)
 })
 
 afterEach(async () => {

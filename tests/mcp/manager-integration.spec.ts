@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { createScope, type ScopeKey } from '@deepseek-ai/dsh-scope'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { fileURLToPath } from 'node:url'
@@ -95,11 +96,9 @@ async function callTool(
   try {
     const result = await viewer.ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(),
-      name,
-      arguments: args,
       agent: scope as unknown as Agent,
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name, arguments: JSON.stringify(args) }],
+    }).then(batch => batch.results[0]!.result)
     if (result.isError) throw new Error(`tool call failed: ${result.error?.message}`)
     return result.content[0]
   } finally {
@@ -114,6 +113,7 @@ beforeEach(async () => {
   host = await harness()
   await host.ctx.plugin(SystemPrompt)
   await host.ctx.plugin(ToolRuntime)
+  await host.ctx.plugin(NativeToolExecutor)
   await host.ctx.plugin(WorkspaceMcpManager)
   markerFiles = []
 })

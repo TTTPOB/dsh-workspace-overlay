@@ -32,7 +32,7 @@ writeFileSync(join(destination, 'SHA256SUMS'), `${digest}  ${filename}\n`)
 writeFileSync(join(destination, 'release-notes.md'), [
   `Prebuilt ${pkg.name} ${pkg.version}.`,
   '',
-  'Validated against DSH 0.1.7-rc.2, Agent/preset-registry fork1, Cordis 4.0.4 and Schemastery 3.18.4.',
+  'Runtime requirements and validation status: see docs/releases.md in the archive.',
   '',
   'Install this independent plugin as an ordinary dependency in the resolving profile (autoInstallPeers: false); declare shared workspace rows in $DSH_HOME/cordis.patch.yml before envrc rows.',
   'Keep daily bundles to official base/Web app; do not auto-append this bundle beside the shared rows.',

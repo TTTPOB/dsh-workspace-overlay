@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
-import { resolve, join } from 'node:path'
+import { dirname, resolve, join } from 'node:path'
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
+const storeDir = dirname(execFileSync('pnpm', ['store', 'path'], { encoding: 'utf8' }).trim())
 const contract = JSON.parse(readFileSync(process.env.DSH_RELEASE_DEPENDENCIES ?? '.github/release-dependencies.json', 'utf8'))
-const root = resolve('.artifacts/consumer')
+// Keep Node's ancestor lookup away from the source checkout's dependencies.
+const root = mkdtempSync(join(tmpdir(), pkg.name + '-consumer-'))
+console.log('Isolated consumer fixture:', root)
+process.on('exit', () => rmSync(root, { recursive: true, force: true }))
 const host = join(root, 'host')
 const home = join(root, 'home')
 const profile = join(home, 'profiles', 'test')
@@ -16,7 +21,7 @@ const overrides = Object.fromEntries(Object.entries(contract.dependencies).map((
   return [name, dependency.source]
 }))
 const hostDependencies = Object.fromEntries(Object.entries(pkg.devDependencies).filter(([name]) => name.startsWith('@deepseek-ai/')))
-hostDependencies['@deepseek-ai/schemastery'] = '3.18.5'
+hostDependencies['@deepseek-ai/schemastery'] = pkg.dependencies['@deepseek-ai/schemastery']
 for (const [name, dependency] of Object.entries(contract.dependencies)) {
   if (name.startsWith('@deepseek-ai/')) hostDependencies[name] = dependency.version
 }
@@ -36,7 +41,7 @@ writeFileSync(join(host, 'package.json'), JSON.stringify({ name: 'release-host-f
 writeFileSync(join(profile, 'package.json'), JSON.stringify({ name: 'release-profile-fixture', private: true, type: 'module', dependencies: profileDependencies, dsh: { profile: { bundles: pkg.name === 'dsh-workspace-envrc' ? ['dsh-workspace-overlay', pkg.name] : [pkg.name] } } }, null, 2) + '\n')
 for (const dir of [host, profile]) {
   writeFileSync(join(dir, 'pnpm-workspace.yaml'), JSON.stringify({ autoInstallPeers: dir === host, verifyDepsBeforeRun: false, overrides: dir === host ? overrides : {}, allowBuilds: { esbuild: true } }, null, 2) + '\n')
-  execFileSync('pnpm', ['install', '--ignore-scripts'], { cwd: dir, stdio: 'inherit' })
+  execFileSync('pnpm', ['install', '--ignore-scripts', '--store-dir', storeDir, '--package-import-method=copy'], { cwd: dir, stdio: 'inherit' })
 }
 const runner = `
 import assert from 'node:assert/strict'
@@ -45,23 +50,15 @@ import { readFileSync, realpathSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
-import { loadProfileDirectory, createRuntimeResolution, PluginPackages, composeEntries, setProfileVersionExemption } from '@deepseek-ai/dsh-app-boot'
+import { loadProfileDirectory, createRuntimeResolution, PluginPackages, composeEntries } from '@deepseek-ai/dsh-app-boot'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 const profileDir = ${JSON.stringify(profile)}
 const anchor = ${JSON.stringify(join(host, 'package.json'))}
 const pkgName = ${JSON.stringify(pkg.name)}
 const pkgVersion = ${JSON.stringify(pkg.version)}
-const runtimeVersion = ${JSON.stringify(contract.baseline)}
 const profileManifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'))
 assert(!Object.keys(profileManifest.dependencies).some(name => name.startsWith('@deepseek-ai/')))
-const identities = pkgName === 'dsh-workspace-envrc' ? ['dsh-workspace-overlay@0.3.0', pkgName + '@' + pkgVersion] : [pkgName + '@' + pkgVersion]
-for (const identity of identities) await setProfileVersionExemption(profileDir, identity, runtimeVersion, false, false)
-let profile = loadProfileDirectory('release-smoke', profileDir, anchor)
-if (pkgName !== 'dsh-progressive-tools') {
-  assert.equal(profile.skippedBundles.length, identities.length, 'Fork-only peers must fail official Host admission without informed consent')
-  for (const identity of identities) await setProfileVersionExemption(profileDir, identity, runtimeVersion, true, true)
-  profile = loadProfileDirectory('release-smoke', profileDir, anchor)
-}
+const profile = loadProfileDirectory('release-smoke', profileDir, anchor)
 assert.deepEqual(profile.skippedBundles, [])
 const resolution = await createRuntimeResolution({ installAnchor: anchor, profile, home: ${JSON.stringify(home)} })
 const ctx = new Context()
@@ -95,6 +92,7 @@ try {
   if (pkgName === 'dsh-progressive-tools') {
     for (const service of ['system-prompt', 'llm', 'tools']) await ctx.plugin((await import('@deepseek-ai/dsh-' + service)).default)
   } else if (pkgName === 'dsh-workspace-envrc') {
+    await ctx.plugin((await import('@deepseek-ai/dsh-session-projection')).default)
     await ctx.plugin((await import('@deepseek-ai/dsh-agent')).default)
     await ctx.loader.create({ id: 'overlay-provider', name: 'dsh-workspace-overlay', config: { trustWorkspaceConfig: false, watchWorkspaceConfig: false } })
   }

@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import WorkspaceRegistry, { defaultConfig } from '../src/registry.js'
-import { WorkspaceMountError, mountWorkspaceTree } from '../src/workspace-tree.js'
+import { WorkspaceMountError, WorkspaceTree, mountWorkspaceTree } from '../src/workspace-tree.js'
 import {
   fixtureState,
   harness,
@@ -41,6 +41,41 @@ function providedServiceNames(ctx: Context): string[] {
 }
 
 describe('mounting a workspace composition', () => {
+  it.each([true, false])('preserves config bytes through edits, release and reload (explicit id: %s)', async (explicitId) => {
+    const ws = await makeWorkspace(host.root, 'read-only')
+    await seedPlugins(ws, ['contribute.js'])
+    const configPath = await writeConfig(ws, [
+      '# Project-owned formatting and comments must survive.',
+      explicitId ? '- id: original' : '- name: ./plugins/contribute.js',
+      ...(explicitId ? ['  name: ./plugins/contribute.js'] : []),
+      '  config: { marker: "original" } # Keep this comment.',
+      '',
+    ].join('\r\n'))
+    const bytes = await readFile(configPath)
+    const lease = await host.registry.acquire(ws)
+    expect(await readFile(configPath)).toEqual(bytes)
+    const entry = fixtureState().contexts[0]!.fiber.entry!
+    const tree = entry.parent.tree
+    if (!(tree instanceof WorkspaceTree)) throw new Error('expected workspace tree')
+
+    await tree.update(entry.options.id, { config: { marker: 'edited' } })
+    expect(fixtureState().markers.at(-1)).toBe('edited')
+    const added = await tree.create({ name: './plugins/contribute.js', config: { marker: 'temporary' } })
+    expect(fixtureState().markers.at(-1)).toBe('temporary')
+    tree.remove(added)
+    await tree.flush()
+    expect(await readFile(configPath)).toEqual(bytes)
+
+    await lease.release()
+    expect(host.registry.size).toBe(0)
+    expect(await readFile(configPath)).toEqual(bytes)
+    const reloaded = await host.registry.acquire(ws)
+    expect(fixtureState().markers.at(-1)).toBe('original')
+    expect(await readFile(configPath)).toEqual(bytes)
+    await reloaded.release()
+    expect(await readFile(configPath)).toEqual(bytes)
+  })
+
   it('activates relative rows in the workspace scope and leaves the config file untouched', async () => {
     const ws = await makeWorkspace(host.root, 'configured')
     await seedPlugins(ws, ['contribute.js'])

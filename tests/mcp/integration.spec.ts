@@ -94,16 +94,16 @@ describe('fixture server — discovery and execution', () => {
   it('executes tools through the public names with the raw name on the wire', async () => {
     const add = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__fixture__add', arguments: { a: 2, b: 3 },
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__fixture__add', arguments: JSON.stringify({ a: 2, b: 3 }) }],
+    }).then(batch => batch.results[0]!.result)
     if (add.isError) throw new Error(`add failed: ${add.error?.message}`)
     expect(add.content[0]).toEqual({ type: 'text', text: '5' })
     expect(add.value).toEqual({ content: [{ type: 'text', text: '5' }] })
 
     const reset = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: KNOWN_FIXTURE_HASH_NAME, arguments: {},
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: KNOWN_FIXTURE_HASH_NAME, arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
     if (reset.isError) throw new Error(`admin.reset failed: ${reset.error?.message}`)
     expect(reset.content[0]).toEqual({ type: 'text', text: 'reset done' })
   })
@@ -111,8 +111,8 @@ describe('fixture server — discovery and execution', () => {
   it('maps MCP isError to a harness error result', async () => {
     const result = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__fixture__fail', arguments: {},
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__fixture__fail', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
     expect(result.isError).toBe(true)
     expect(result.content[0]).toEqual({ type: 'text', text: 'Error: Something went wrong' })
   })
@@ -120,8 +120,8 @@ describe('fixture server — discovery and execution', () => {
   it('projects image blocks to placeholders while preserving the JSON value', async () => {
     const result = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__fixture__image', arguments: {},
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__fixture__image', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
     expect(result.content[0]).toEqual({
       type: 'text',
       text: 'Here is an image:\n[image: image/png, content discarded]\nEnd of image.',
@@ -248,8 +248,8 @@ describe('fixture server — lifecycle behaviors', () => {
 
     const result = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__crashy__crash', arguments: {},
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__crashy__crash', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
     if (result.isError) throw new Error(`crash call failed: ${result.error?.message}`)
 
     await vi.waitFor(() => {
@@ -263,8 +263,8 @@ describe('fixture server — lifecycle behaviors', () => {
     // The re-registered definition serves calls again.
     const again = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__crashy__add', arguments: { a: 1, b: 1 },
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__crashy__add', arguments: JSON.stringify({ a: 1, b: 1 }) }],
+    }).then(batch => batch.results[0]!.result)
     if (again.isError) throw new Error(`post-reconnect add failed: ${again.error?.message}`)
     expect(again.content[0]).toEqual({ type: 'text', text: '2' })
   })
@@ -275,8 +275,8 @@ describe('fixture server — lifecycle behaviors', () => {
 
     const trigger = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__dyn__register_extra', arguments: { name: 'dyn1' },
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__dyn__register_extra', arguments: JSON.stringify({ name: 'dyn1' }) }],
+    }).then(batch => batch.results[0]!.result)
     if (trigger.isError) throw new Error(`register_extra failed: ${trigger.error?.message}`)
 
     await vi.waitFor(() => { expect(ctx.tools.get('mcp__dyn__dyn1')).toBeDefined() })
@@ -285,8 +285,8 @@ describe('fixture server — lifecycle behaviors', () => {
 
     const call = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__dyn__dyn1', arguments: {},
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__dyn__dyn1', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
     if (call.isError) throw new Error(`dyn1 failed: ${call.error?.message}`)
     expect(call.content[0]).toEqual({ type: 'text', text: 'extra' })
   })
@@ -301,8 +301,8 @@ describe('fixture server — lifecycle behaviors', () => {
     // The initial sync consumed list #1; the notification-triggered list #2 fails.
     const trigger = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__flaky__register_extra', arguments: { name: 'ghost' },
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__flaky__register_extra', arguments: JSON.stringify({ name: 'ghost' }) }],
+    }).then(batch => batch.results[0]!.result)
     if (trigger.isError) throw new Error(`register_extra failed: ${trigger.error?.message}`)
 
     await vi.waitFor(() => {
@@ -330,16 +330,16 @@ describe('fixture server — lifecycle behaviors', () => {
 
     const result = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__timeout__slow', arguments: { ms: 5_000 },
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__timeout__slow', arguments: JSON.stringify({ ms: 5_000 }) }],
+    }).then(batch => batch.results[0]!.result)
     expect(result.isError).toBe(true)
     expect(String(result.error?.message)).toMatch(/timed out|timeout/i)
 
     // The connection survives the timeout and keeps serving.
     const after = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__timeout__add', arguments: { a: 1, b: 2 },
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__timeout__add', arguments: JSON.stringify({ a: 1, b: 2 }) }],
+    }).then(batch => batch.results[0]!.result)
     if (after.isError) throw new Error(`post-timeout call failed: ${after.error?.message}`)
     expect(after.content[0]).toEqual({ type: 'text', text: '3' })
     expect(notifications.at(-1)).toEqual({ serverName: 'timeout', names: expect.any(Array), status: 'registered' })
@@ -353,8 +353,8 @@ describe('fixture server — lifecycle behaviors', () => {
     const controller = new AbortController()
     const pending = ctx.tools.execute({
       signal: controller.signal,
-      callId: nextCallId(), name: 'mcp__cancellable__slow', arguments: { ms: 10_000 },
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__cancellable__slow', arguments: JSON.stringify({ ms: 10_000 }) }],
+    }).then(batch => batch.results[0]!.result)
     await sleep(100)
     controller.abort()
     const result = await pending
@@ -454,8 +454,8 @@ describe('streamable-http transport end to end', () => {
     expect(seenAuthorization).toBe('Bearer http-canary-header')
     const result = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__http__http_add', arguments: { a: 20, b: 22 },
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__http__http_add', arguments: JSON.stringify({ a: 20, b: 22 }) }],
+    }).then(batch => batch.results[0]!.result)
     if (result.isError) throw new Error(`http_add failed: ${result.error?.message}`)
     expect(result.content[0]).toEqual({ type: 'text', text: '42' })
 

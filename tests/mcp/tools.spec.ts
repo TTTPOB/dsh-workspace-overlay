@@ -276,8 +276,8 @@ describe('tool execution', () => {
     await syncTools(client as unknown as Client, ctx, defaultOpts, new Map())
     const result = await ctx.tools.execute({
       signal: controller.signal,
-      callId: nextCallId(), name: 'mcp__srv__echo', arguments: { msg: 'hi' },
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__srv__echo', arguments: JSON.stringify({ msg: 'hi' }) }],
+    }).then(batch => batch.results[0]!.result)
 
     expect(result.isError).toBe(false)
     expect(result.content).toEqual([{ type: 'text', text: 'hello world' }])
@@ -300,8 +300,8 @@ describe('tool execution', () => {
     await syncTools(client as unknown as Client, ctx, defaultOpts, new Map())
     const result = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: publicToolName('srv', 'admin.reset'), arguments: {},
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: publicToolName('srv', 'admin.reset'), arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
 
     expect(result.isError).toBe(false)
     expect(client.callTool).toHaveBeenCalledWith(
@@ -322,7 +322,10 @@ describe('tool execution', () => {
     )
 
     await syncTools(client as unknown as Client, ctx, defaultOpts, new Map())
-    const result = await ctx.tools.execute({ signal: testToolSignal, callId: nextCallId(), name: 'mcp__srv__multi', arguments: {} })
+    const result = await ctx.tools.execute({
+      signal: testToolSignal,
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__srv__multi', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
 
     expect(result.content[0]).toEqual({
       type: 'text',
@@ -345,7 +348,10 @@ describe('tool execution', () => {
     )
 
     await syncTools(client as unknown as Client, ctx, defaultOpts, new Map())
-    const result = await ctx.tools.execute({ signal: testToolSignal, callId: nextCallId(), name: 'mcp__srv__fail', arguments: {} })
+    const result = await ctx.tools.execute({
+      signal: testToolSignal,
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__srv__fail', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
 
     expect(result.isError).toBe(true)
     expect(result.content[0]).toEqual({ type: 'text', text: 'Error: something went wrong' })
@@ -367,8 +373,8 @@ describe('tool execution', () => {
     await syncTools(client as unknown as Client, ctx, defaultOpts, new Map())
     const result = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__srv__structured', arguments: {},
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__srv__structured', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
 
     if (result.isError) throw new Error('expected supported structuredContent to validate')
     expect(result.value).toEqual({ content: [{ type: 'text', text: '42' }], structuredContent: { answer: 42 } })
@@ -383,8 +389,8 @@ describe('tool execution', () => {
     await syncTools(client as unknown as Client, ctx, defaultOpts, new Map())
     const result = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__srv__future-schema', arguments: {},
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__srv__future-schema', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
 
     if (result.isError) throw new Error('unsupported MCP output schemas must fall back')
     expect(result.value).toEqual({ content: [], structuredContent: ['kept', { nested: true }] })
@@ -395,7 +401,10 @@ describe('tool execution', () => {
     client.callTool.mockResolvedValue({ toolResult: { key: 'value' } })
 
     await syncTools(client as unknown as Client, ctx, defaultOpts, new Map())
-    const result = await ctx.tools.execute({ signal: testToolSignal, callId: nextCallId(), name: 'mcp__srv__legacy', arguments: {} })
+    const result = await ctx.tools.execute({
+      signal: testToolSignal,
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__srv__legacy', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
 
     expect(result.isError).toBe(false)
     expect(result.content[0]).toEqual({ type: 'text', text: '{"key":"value"}' })
@@ -409,8 +418,8 @@ describe('tool execution', () => {
     await syncTools(client as unknown as Client, ctx, defaultOpts, new Map())
     const result = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__srv__task-only', arguments: {},
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__srv__task-only', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
 
     expect(result.isError).toBe(true)
     expect(result.error?.message).toContain('requires task-based execution')
@@ -424,7 +433,10 @@ describe('tool execution', () => {
     )
 
     await syncTools(client as unknown as Client, ctx, defaultOpts, new Map())
-    await ctx.tools.execute({ signal: testToolSignal, callId: nextCallId(), name: 'mcp__srv__coerce', arguments: null })
+    await ctx.tools.execute({
+      signal: testToolSignal,
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__srv__coerce', arguments: JSON.stringify(null) }],
+    }).then(batch => batch.results[0]!.result)
 
     expect(client.callTool).toHaveBeenCalledWith(
       { name: 'coerce', arguments: {} },
@@ -447,7 +459,10 @@ describe('tool execution', () => {
     }) as never)
 
     await syncTools(client as unknown as Client, ctx, { ...defaultOpts, toolCallTimeoutMs: 30 }, new Map())
-    const result = await ctx.tools.execute({ signal: testToolSignal, callId: nextCallId(), name: 'mcp__srv__slow', arguments: {} })
+    const result = await ctx.tools.execute({
+      signal: testToolSignal,
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__srv__slow', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
 
     expect(result.isError).toBe(true)
     expect(result.error?.message).toContain('RequestTimeout')
@@ -468,8 +483,8 @@ describe('tool execution', () => {
     const controller = new AbortController()
     const pending = ctx.tools.execute({
       signal: controller.signal,
-      callId: ToolCallId('cancel-me'), name: 'mcp__srv__hang', arguments: {},
-    })
+      calls: [{ type: 'tool-call', id: ToolCallId('cancel-me'), name: 'mcp__srv__hang', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
     await sleep(10)
     controller.abort()
     const result = await pending

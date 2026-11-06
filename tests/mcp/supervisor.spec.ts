@@ -131,8 +131,8 @@ describe('reconnect supervisor', () => {
     // Post-recovery calls execute through the re-registered definition.
     const result = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: nextCallId(), name: 'mcp__srv__revived', arguments: {},
-    })
+      calls: [{ type: 'tool-call', id: nextCallId(), name: 'mcp__srv__revived', arguments: JSON.stringify({}) }],
+    }).then(batch => batch.results[0]!.result)
     expect(result.isError).toBe(false)
 
     // User-visible state: reconnecting and recovered are distinct lines.
