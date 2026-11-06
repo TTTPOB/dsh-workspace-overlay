@@ -107,10 +107,10 @@
     "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
     "@deepseek-ai/dsh-typert-protocol": "0.2.2-rc.1",
     "@deepseek-ai/dsh-util-values": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-agent-preset-registry": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-agent-preset-registry": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "3.19.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "chokidar": "^4.0.3",
     "zod": "^4.4.3"
@@ -135,7 +135,8 @@
     "vitest": "^3.2.0",
     "@deepseek-ai/dsh-agent-preset-registry": "0.2.2-rc.1",
     "@deepseek-ai/dsh-app-boot": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0"
   },
   "license": "MIT"
 }

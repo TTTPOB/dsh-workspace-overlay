@@ -21,7 +21,7 @@ const overrides = Object.fromEntries(Object.entries(contract.dependencies).map((
   return [name, dependency.source]
 }))
 const hostDependencies = Object.fromEntries(Object.entries(pkg.devDependencies).filter(([name]) => name.startsWith('@deepseek-ai/')))
-hostDependencies['@deepseek-ai/schemastery'] = pkg.dependencies['@deepseek-ai/schemastery']
+hostDependencies['@deepseek-ai/schemastery'] = pkg.peerDependencies['@deepseek-ai/schemastery']
 for (const [name, dependency] of Object.entries(contract.dependencies)) {
   if (name.startsWith('@deepseek-ai/')) hostDependencies[name] = dependency.version
 }
@@ -56,6 +56,7 @@ const profileDir = ${JSON.stringify(profile)}
 const anchor = ${JSON.stringify(join(host, 'package.json'))}
 const pkgName = ${JSON.stringify(pkg.name)}
 const pkgVersion = ${JSON.stringify(pkg.version)}
+const forkVersions = ${JSON.stringify(Object.fromEntries(Object.entries(contract.dependencies).map(([name, dependency]) => [name, dependency.version])))}
 const profileManifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'))
 assert(!Object.keys(profileManifest.dependencies).some(name => name.startsWith('@deepseek-ai/')))
 const profile = loadProfileDirectory('release-smoke', profileDir, anchor)
@@ -77,6 +78,7 @@ try {
       const actual = ctx.pluginPackages.packageOf(peer, pathToFileURL(plugin.manifestPath).href)
       assert(actual, 'Missing shared peer ' + peer)
       if (peer.startsWith('@deepseek-ai/')) {
+        assert.equal(actual.version, forkVersions[peer] ?? plugin.manifest.peerDependencies[peer], 'Exact shared peer version ' + peer)
         assert.equal(realpathSync(requireFromPlugin.resolve(peer)), realpathSync(requireFromHost.resolve(peer)), 'Shared Host peer ' + peer)
         assert(!existsSync(join(profileDir, 'node_modules', peer)), 'Profile owns Host peer ' + peer)
       }
