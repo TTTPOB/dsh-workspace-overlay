@@ -26,7 +26,7 @@ for (const [name, dependency] of Object.entries(contract.dependencies)) {
 }
 writeFileSync(contractPath, JSON.stringify(contract, null, 2) + '\n')
 const overrides = Object.fromEntries(Object.entries(contract.dependencies).map(([name, dependency]) => [name, dependency.source]))
-writeFileSync(join(destination, 'pnpm-workspace.yaml'), JSON.stringify({ overrides, verifyDepsBeforeRun: false, allowBuilds: { esbuild: true } }, null, 2) + '\n')
+writeFileSync(join(destination, 'pnpm-workspace.yaml'), JSON.stringify({ overrides, verifyDepsBeforeRun: false, blockExoticSubdeps: false, allowBuilds: { esbuild: true } }, null, 2) + '\n')
 execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: destination, stdio: 'inherit' })
 execFileSync('pnpm', ['install', '--frozen-lockfile'], { cwd: destination, stdio: 'inherit' })
 execFileSync('pnpm', ['verify:dependencies'], { cwd: destination, stdio: 'inherit' })
