@@ -5,14 +5,14 @@
 
 DSH 树外插件：为每个 canonical workspace 路径提供共享的 Cordis scope（`workspaceCordis` service）。同一 workspace 的所有消费者（session、agent）租用同一个 scope；最后一个租约释放时 scope 被 dispose。可选地，首个租约会把 `<workspace>/.dsh/cordis.yml` 挂载为该 workspace 的 Cordis composition，并默认监听该顶层配置文件——编辑保存即整树热重载（见「Workspace 热重载」）；bundle 同时通过 awaited setup contribution 把 Agent 放入 workspace；官方 preset registry 独占 parent binding 与 preset generation（见下文「Agent 集成」）。`./mcp` 子路径提供从官方 rc.6 `@deepseek-ai/dsh-mcp-client` 移植的 MCP core（transport / tool sync / connection supervisor），以及 workspace-aware MCP manager + 插件入口（global 每 serverName 一进程、workspace override 每 workspace 一进程、继承 global 的 workspace 零额外进程、同名 namespace 整体遮蔽，见「MCP manager」）。
 
-目标运行时基线：DSH service 包 `0.2.2-rc.1`（Agent 与 preset registry 使用 fork seam）、Cordis `4.1.0`、Schemastery `3.19.0`、Include `1.1.0`、Loader `1.1.0`。共享运行时包声明为 peer，开发依赖记录官方测试基线；构建与测试必须显式 override Agent 和 preset registry 为目标 fork1 tarball，不能把官方基线类型检查通过视为新 API 生效。运行时必须与 Host 解析到同一个模块实例。RC 兼容范围按 `package.json` 声明，不自动承诺跨 RC 基线兼容。官方 `@deepseek-ai/dsh-mcp-client` 只作为开发依赖用于明确支持字段的配置兼容测试；本包不消费 server instructions，显式 `maxInstructionBytes` 配置会被拒绝，不承诺完整官方 Config parity。
+目标运行时基线：DSH service 包 `0.2.2-rc.5`（Agent 与 preset registry 使用 fork seam）、Cordis `4.1.0`、Schemastery `3.19.0`、Include `1.1.0`、Loader `1.1.0`。共享运行时包声明为 peer，开发依赖记录官方测试基线；构建与测试必须显式 override Agent 和 preset registry 为目标 fork1 tarball，不能把官方基线类型检查通过视为新 API 生效。运行时必须与 Host 解析到同一个模块实例。RC 兼容范围按 `package.json` 声明，不自动承诺跨 RC 基线兼容。官方 `@deepseek-ai/dsh-mcp-client` 只作为开发依赖用于明确支持字段的配置兼容测试；本包不消费 server instructions，显式 `maxInstructionBytes` 配置会被拒绝，不承诺完整官方 Config parity。
 
 
 ## 发布验证
 
 本地 consumer 验证可设置 `DSH_RELEASE_DEPENDENCIES=/absolute/contract.json`，使用同结构的依赖合同及 `file:` tarball 来源；不改变公开发布合同。完整验证需要目标 fork 的 Agent setup/placement 接口，官方包不能替代。正式发布来源尚未填写时，`prepare:release` 继续拒绝执行。
 
-[Validate and release](.github/workflows/release.yml) 与本地共用 `pnpm prepare:release`，执行 frozen 安装和真实消费位置解析检查。[依赖合同](.github/release-dependencies.json) 固定 Agent/preset-registry fork1，未填写的正式资产来源会阻止发布准备；资产存在后，合同与 workspace overrides 填入同一不可变 URL，再由 pnpm 生成锁文件。llm 与用于支持字段对照的 mcp-client 保持官方 `0.2.2-rc.1`。
+[Validate and release](.github/workflows/release.yml) 与本地共用 `pnpm prepare:release`，执行 frozen 安装和真实消费位置解析检查。[依赖合同](.github/release-dependencies.json) 固定 Agent/preset-registry fork1，未填写的正式资产来源会阻止发布准备；资产存在后，合同与 workspace overrides 填入同一不可变 URL，再由 pnpm 生成锁文件。llm 与用于支持字段对照的 mcp-client 保持官方 `0.2.2-rc.5`。
 
 本地诊断可执行 `node .github/scripts/prepare-local.mjs <inputs.json>`：输入 JSON 将合同包名映射到绝对 tarball 路径，脚本检查名称和版本，在 `.artifacts/local-source` 生成隔离锁文件；在该副本运行既有检查，不改变公开 source manifest。本地 tarball 不是正式发布输入。Schemastery 是插件自带的运行依赖，不要求与 Host 共享实例。
 
